@@ -17,6 +17,9 @@ inductance, ideal transformers, short circuits, and grounded two-port
     ex()                expert mode: choose the analysis at run time, and
                         add your own equations, unknowns and conditions
     pr(), pf(), gain()  power, power factor, transfer functions
+    time_samples()      numeric (t, y) samples of a tr() result, for plotting
+    bode_samples()      numeric (freq, mag_dB, phase_deg) samples of a fd()
+                        result across a frequency sweep, for a Bode plot
 
 Answers are symbolic. Component values may be numbers, SI-prefixed
 values (`4.7'k`), or symbols -- give a resistance as `x` and the answers
@@ -30,10 +33,12 @@ from .utils import pr, pf, gain
 from .equiv import th, er, port
 from .laplace import tr, t2s, s2t
 from .dispatch import ex
+from .plotting import time_samples, bode_samples, PlotError
 
 #: The single source of truth for the version: pyproject.toml reads this
 #: attribute at build time, so the two cannot disagree.
 __version__ = "0.4.1"
 
 __all__ = ["dc", "ac", "fd", "tr", "t2s", "s2t", "pr", "pf", "gain", "th", "er", "port", "ex",
+           "time_samples", "bode_samples", "PlotError",
            "AmbiguousValueError", "find_ambiguous_values", "__version__"]

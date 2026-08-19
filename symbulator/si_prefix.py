@@ -162,6 +162,8 @@ def _allowed_namespace():
     need it, matching this module's style of keeping SymPy import cost
     out of code paths that don't touch it."""
     import sympy as sp
+    from .utils import pr
+
     ns = {
         "pi": sp.pi,
         "oo": sp.oo,
@@ -173,6 +175,11 @@ def _allowed_namespace():
         "arg": sp.arg, "conjugate": sp.conjugate, "sign": sp.sign,
         "Heaviside": sp.Heaviside, "DiracDelta": sp.DiracDelta,
         "Min": sp.Min, "Max": sp.Max,
+        # The `[...]` parallel-impedance shortcut expands to a literal
+        # `pr(...)` call (see expand_shorthand below), so `pr` has to
+        # resolve to the real function here or that call fails with
+        # "'Symbol' object is not callable" once it reaches sympify.
+        "pr": pr,
     }
     # i, I, j and J all mean the imaginary unit. Reserving all four is
     # what lets `3*j` be unambiguous: no variable may use those names,

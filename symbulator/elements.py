@@ -151,6 +151,32 @@ def _split_elements(desc: str) -> List[str]:
     return parts
 
 
+def _split_fields(raw: str) -> List[str]:
+    """Split one element's raw text on `,` into fields, the way
+    `str.split(",")` does -- except a comma inside parentheses doesn't
+    count as a separator. Needed because the `[...]` parallel-impedance
+    shortcut (see si_prefix.expand_shorthand) has already been expanded
+    to `pr(a,b,c)` by the time this runs, and those inner commas belong
+    to the value field, not the element's field list."""
+    fields: List[str] = []
+    depth = 0
+    current = ""
+    for ch in raw:
+        if ch == "(":
+            depth += 1
+            current += ch
+        elif ch == ")":
+            depth = max(0, depth - 1)
+            current += ch
+        elif ch == "," and depth == 0:
+            fields.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    fields.append(current.strip())
+    return fields
+
+
 def parse_circuit(desc: str) -> List[Element]:
     """Parse a Symbulator-style circuit description string into a list
     of Element objects. Raises CircuitError on malformed input (mirrors
@@ -162,7 +188,7 @@ def parse_circuit(desc: str) -> List[Element]:
 
     for raw in raw_elements:
         raw = expand_shorthand(raw)
-        parts = [p.strip() for p in raw.split(",")]
+        parts = _split_fields(raw)
         if not parts or parts[0] == "":
             raise CircuitError(f"Malformed element description: '{raw}'.")
 
