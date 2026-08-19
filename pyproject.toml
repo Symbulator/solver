@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "symbulator"
+# Read from symbulator/__init__.py so there is one source of truth.
+dynamic = ["version"]
+description = "A symbolic (SymPy-based) linear-circuit simulator, ported from Roberto Perez-Franco's TI-Nspire CX II CAS program of the same name."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Roberto Perez-Franco", email = "perezfranco@gmail.com" },
+]
+keywords = ["circuit", "simulation", "symbolic", "sympy", "electronics", "spice", "laplace"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "sympy>=1.13",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://pypi.org/project/symbulator/"
+
+[tool.setuptools.dynamic]
+version = { attr = "symbulator.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["symbulator", "symbulator.*"]
