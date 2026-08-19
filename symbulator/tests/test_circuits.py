@@ -42,6 +42,24 @@ def test_current_divider_dc():
     assert approx_eq(res.i("r2"), expected_v / 3000)
 
 
+def test_bracket_parallel_resistor_shortcut():
+    # r1,1,2,[10,20,30] is the calculator's `[...]` shortcut for three
+    # resistors in parallel, expanded internally to pr(10,20,30). Two
+    # things had to work together for this to parse at all: splitting
+    # an element's fields on "," must skip commas inside pr(...)'s own
+    # parentheses, and "pr" must resolve to the real function rather
+    # than becoming a plain symbol once the value field is sympified.
+    res = dc("e1,1,0,10:r1,1,2,[10,20,30]:r2,2,0,5")
+    expected_r1 = float(pr(10, 20, 30))
+    expected_v2 = 10 * 5 / (expected_r1 + 5)
+    assert approx_eq(res.v("2"), expected_v2)
+    assert approx_eq(res.i("r1"), 10 / (expected_r1 + 5))
+
+    # A single bracketed value degenerates to just that value.
+    res2 = dc("e1,1,0,10:r1,1,2,[10]:r2,2,0,10")
+    assert approx_eq(res2.v("2"), 5)
+
+
 def test_series_rlc_ac_impedance():
     R, L, C, w = 100, 0.1, 1e-6, 1000
     res = ac("e1,1,0,10:r1,1,2,100:l1,2,3,0.1:c1,3,0,1e-6", omega=w)
