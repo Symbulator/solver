@@ -33,7 +33,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7.0"]
+# Only time_samples()/bode_samples() (symbulator.plotting) need NumPy,
+# and they import it lazily -- so it's an extra, not a hard dependency,
+# for everyone who just wants dc()/ac()/tr()/etc.
+plot = ["numpy>=1.24"]
+# test_plotting.py exercises the plot extra, so pull it in too.
+test = ["pytest>=7.0", "numpy>=1.24"]
 
 [project.urls]
 Homepage = "https://pypi.org/project/symbulator/"
