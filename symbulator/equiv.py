@@ -1,0 +1,230 @@
+"""
+Equivalent-circuit and two-port-extraction tools: ports `th()`, `er()`,
+and `port()`.
+
+All three work by adding one or two *test* excitations to a copy of the
+given circuit description and re-running the existing `dc`/`ac` engine
+-- no new circuit physics, just orchestration on top of Phase 1.
+
+`er()` and `port()` use symbolic test-source values and extract the
+answer by substitution after a single solve, mirroring how the original
+TI-Basic used the test sources' own names as their (initially undefined,
+i.e. symbolic) values and read off ratios/derivatives after the fact.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+import sympy as sp
+
+from .analysis import Result, _run
+from .elements import CircuitError
+
+
+def _v(res: Result, node: str) -> sp.Expr:
+    """Node voltage, treating "0" (ground) as the literal constant 0
+    even though the engine doesn't create a v_0 symbol for it."""
+    if node == "0":
+        return sp.Integer(0)
+    return res.v(node)
+
+
+@dataclass
+class TheveninResult:
+    """Everything `th()` computes: the Thevenin/Norton equivalent of a
+    circuit as seen from a chosen pair of nodes, reduced to a single
+    voltage source (vth) in series with an equivalent resistance/
+    impedance (z) -- or equivalently a single current source (ino) in
+    parallel with that same z. `pmax` is the maximum power a load
+    connected across those two nodes could ever draw (achieved when the
+    load's own resistance/impedance equals z, i.e. "matched")."""
+    domain: str
+    vth: sp.Expr      # open-circuit voltage between n1 and n2
+    ino: sp.Expr       # short-circuit current from n1 to n2
+    z: sp.Expr          # Req (dc) or Zeq (ac) = vth / ino
+    pmax: sp.Expr        # maximum power transferable to a matched load
+
+    def __repr__(self) -> str:
+        """Labels the equivalent-impedance field "req" or "zeq" to match
+        the vocabulary of the domain it was computed in (a dc circuit
+        has a resistance, an ac circuit has an impedance) rather than
+        printing the generic field name `z` either way."""
+        z_label = "req" if self.domain == "dc" else "zeq"
+        return (f"TheveninResult(domain={self.domain!r}, vth={self.vth}, "
+                f"ino={self.ino}, {z_label}={self.z}, pmax={self.pmax})")
+
+
+def th(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
+        params: Optional[dict] = None, use_rms: bool = False,
+        suffix: str = "ask") -> TheveninResult:
+    """Thevenin/Norton equivalent of the circuit `desc` as seen between
+    nodes `n1` and `n2` -- ports `th()`. Works for active circuits (ones
+    with independent sources); for source-free circuits use `er()`
+    instead (this mirrors the original's own guidance message)."""
+    n1, n2 = str(n1), str(n2)
+
+    open_circuit = _run(desc, domain, omega=omega, params=params,
+                        use_rms=use_rms, suffix=suffix)
+    vth = sp.simplify(_v(open_circuit, n1) - _v(open_circuit, n2))
+    if vth == 0:
+        raise CircuitError(
+            "This circuit is not active (open-circuit voltage is 0). Try er() instead."
+        )
+
+    test_name = "stest"
+    short_circuit = _run(f"{desc}:{test_name},{n1},{n2}", domain, omega=omega,
+                          params=params, use_rms=use_rms, suffix=suffix)
+    ino = sp.simplify(short_circuit.i(test_name))
+
+    z = sp.simplify(vth / ino)
+    if domain == "dc":
+        pmax = sp.simplify(vth * ino / 4)
+    else:
+        denom = 4 if use_rms else 8
+        pmax = sp.simplify(sp.Abs(vth) ** 2 / (denom * sp.re(z)))
+
+    return TheveninResult(domain=domain, vth=vth, ino=ino, z=z, pmax=pmax)
+
+
+def er(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
+       params: Optional[dict] = None, suffix: str = "ask") -> sp.Expr:
+    """Equivalent resistance (dc) / impedance (ac) of a source-free
+    (passive) circuit `desc`, as seen between nodes `n1` and `n2` --
+    ports `er()`. Injects a 1A test current source and reads the
+    resulting voltage across the port directly; only valid when `desc`
+    has no independent sources of its own (use `th()` for active
+    circuits)."""
+    n1, n2 = str(n1), str(n2)
+    test_name = "jtest"
+    res = _run(f"{desc}:{test_name},{n2},{n1},1", domain, omega=omega,
+               params=params, suffix=suffix)
+    return sp.simplify(_v(res, n1) - _v(res, n2))
+
+
+_PORT_KINDS = ("z", "y", "h", "g", "a", "b")
+
+
+def port(desc: str, n1: str, n2: str, kind: str, domain: str = "dc", omega=None,
+         params: Optional[dict] = None, suffix: str = "ask") -> dict:
+    """Extract the z/y/h/g/a/b two-port parameters of the circuit `desc`
+    between ports (`n1`, ground) and (`n2`, ground) -- ports `port()`.
+    Returns a dict with keys "11", "12", "21", "22".
+
+    Uses one solve with symbolic test-source values (a current source
+    at each port for z/a/b, a voltage source at each port for y, one of
+    each for h/g -- matching the original's own choice of excitation
+    per parameter type) and extracts each parameter by substituting the
+    other port's test value to 0, exactly as the original does."""
+    kind = kind.lower()
+    if kind not in _PORT_KINDS:
+        raise ValueError(f"Unknown two-port kind '{kind}'; must be one of {_PORT_KINDS}.")
+    n1, n2 = str(n1), str(n2)
+
+    # Two symbolic test values, one per port. Leaving them as free
+    # symbols (rather than picking e.g. 1 A) is what lets a single solve
+    # yield every parameter: each parameter is some ratio of the
+    # solution's dependence on x1 vs x2, extracted below by substituting
+    # the *other* test value to 0 (see `ratio`).
+    x1, x2 = sp.symbols("x_test1 x_test2")
+
+    # Which kind of test source to attach at each port follows the
+    # classic definition of that parameter family: z (and a/b, which are
+    # derived from an intermediate z below) are "open-circuit" parameters
+    # -- driven by current sources, since forcing one port's *other*
+    # test value to 0 open-circuits it exactly the way an open-circuit
+    # measurement would. y is the dual: "short-circuit" parameters,
+    # driven by voltage sources, where zeroing a test value short-circuits
+    # that port. h and g are hybrids of the two -- one port driven by
+    # current, the other by voltage -- matching which of v/i each of
+    # their four defining equations mixes (see the comments in
+    # `engine._stamp_two_port` for the h/g defining equations).
+    if kind in ("z", "a", "b"):
+        test = f"jtest1,0,{n1},{x1}:jtest2,0,{n2},{x2}"
+        i1_of = lambda res: res.i("jtest1")
+        i2_of = lambda res: res.i("jtest2")
+    elif kind == "y":
+        test = f"etest1,{n1},0,{x1}:etest2,{n2},0,{x2}"
+        i1_of = lambda res: -res.i("etest1")
+        i2_of = lambda res: -res.i("etest2")
+    elif kind == "h":
+        test = f"jtest1,0,{n1},{x1}:etest2,{n2},0,{x2}"
+        i1_of = lambda res: res.i("jtest1")
+        i2_of = lambda res: -res.i("etest2")
+    else:  # g
+        test = f"etest1,{n1},0,{x1}:jtest2,0,{n2},{x2}"
+        i1_of = lambda res: -res.i("etest1")
+        i2_of = lambda res: res.i("jtest2")
+
+    res = _run(f"{desc}:{test}", domain, omega=omega, params=params,
+               suffix=suffix)
+    V1, V2 = _v(res, n1), _v(res, n2)
+    I1, I2 = i1_of(res), i2_of(res)
+
+    def ratio(expr, zero_sym, divisor):
+        """`expr` with `zero_sym` (the *other* port's test value) set to
+        0, divided by `divisor` (this port's own test value) -- this is
+        exactly "response at this port, per unit excitation, with the
+        other port open/shorted" for whichever parameter is being read
+        off, i.e. one entry of the two-port matrix."""
+        return sp.simplify(expr.subs(zero_sym, 0) / divisor)
+
+    if kind == "z":
+        # z11 = v1/i1 (port 2 open, i.e. x2=0); z12 = v1/i2 (port 1
+        # open); z21, z22 are the same idea for v2. See the z branch of
+        # `engine._stamp_two_port` for the matrix these four solve.
+        p11 = ratio(V1, x2, x1)
+        p12 = ratio(V1, x1, x2)
+        p21 = ratio(V2, x2, x1)
+        p22 = ratio(V2, x1, x2)
+    elif kind == "y":
+        # Dual of z: y11 = i1/v1 (port 2 shorted), etc.
+        p11 = ratio(I1, x2, x1)
+        p12 = ratio(I1, x1, x2)
+        p21 = ratio(I2, x2, x1)
+        p22 = ratio(I2, x1, x2)
+    elif kind == "h":
+        # h11 = v1/i1 (port 2 shorted, x2=0); h12 = v1/v2 (port 1 open,
+        # x1=0, so no test current flows and V1 is driven purely by V2's
+        # effect through the network); h21, h22 mirror that for i2.
+        p11 = ratio(V1, x2, x1)
+        p12 = sp.simplify(V1.subs(x1, 0) / V2)
+        p21 = ratio(I2, x2, x1)
+        p22 = ratio(I2, x1, x2)
+    elif kind == "g":
+        # Mirror image of h: g11 = i1/v1 (port 2 open), g12 = i1/i2
+        # (port 1 shorted), g21 = v2/v1 (port 2 open, no test current at
+        # port 2 to disturb it), g22 = v2/i2.
+        p11 = ratio(I1, x2, x1)
+        p12 = ratio(I1, x1, x2)
+        p21 = sp.simplify(V2.subs(x2, 0) / V1)
+        p22 = ratio(V2, x1, x2)
+    else:  # a or b: derived from the z-equivalent intermediate values
+        # rather than a separate excitation, since both a/b matrices have
+        # simple closed-form conversions from z -- cheaper and less code
+        # than deriving a bespoke excitation scheme for each.
+        z11 = ratio(V1, x2, x1)
+        z12 = ratio(V1, x1, x2)
+        z21 = ratio(V2, x2, x1)
+        z22 = ratio(V2, x1, x2)
+        det = sp.simplify(z11 * z22 - z12 * z21)
+        if kind == "a":
+            # Standard z -> ABCD (chain-matrix) conversion: with the
+            # ABCD convention v1 = A*v2 - B*i2, i1 = C*v2 - D*i2 (i2
+            # flowing out of port 2, the convention that makes chaining
+            # two-ports end-to-end a matrix product).
+            p11 = sp.simplify(z11 / z21)
+            p12 = sp.simplify(det / z21)
+            p21 = sp.simplify(1 / z21)
+            p22 = sp.simplify(z22 / z21)
+        else:  # b
+            # Same conversion with ports 1 and 2 swapped, giving the
+            # inverse chain matrix (b-parameters relate port 2 back to
+            # port 1 instead of the other way around).
+            p11 = sp.simplify(z22 / z12)
+            p12 = sp.simplify(det / z12)
+            p21 = sp.simplify(1 / z12)
+            p22 = sp.simplify(z11 / z12)
+
+    return {"11": p11, "12": p12, "21": p21, "22": p22}

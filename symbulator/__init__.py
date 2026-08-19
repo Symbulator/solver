@@ -1,0 +1,39 @@
+"""
+symbulator: a Python/SymPy port of Roberto Perez-Franco's "Symbulator 8"
+TI-Nspire CX II CAS circuit simulator.
+
+The port is complete: every analysis and tool the calculator offered is
+here, working on linear circuits built from resistors, inductors,
+capacitors, independent and dependent sources, ideal op-amps, mutual
+inductance, ideal transformers, short circuits, and grounded two-port
+(z/y/h/g/a/b) blocks.
+
+    dc(), ac()          DC and AC (phasor) analysis
+    fd()                s-domain (Laplace) analysis
+    tr()                transient analysis, via fd() and an inverse transform
+    t2s(), s2t()        Laplace transform and its inverse
+    th(), er()          Thevenin/Norton equivalent, equivalent impedance
+    port()              two-port parameter extraction
+    ex()                expert mode: choose the analysis at run time, and
+                        add your own equations, unknowns and conditions
+    pr(), pf(), gain()  power, power factor, transfer functions
+
+Answers are symbolic. Component values may be numbers, SI-prefixed
+values (`4.7'k`), or symbols -- give a resistance as `x` and the answers
+come back in terms of `x`.
+"""
+
+from .analysis import dc, ac, fd
+from .si_prefix import AmbiguousValueError
+from .elements import find_ambiguous_values
+from .utils import pr, pf, gain
+from .equiv import th, er, port
+from .laplace import tr, t2s, s2t
+from .dispatch import ex
+
+#: The single source of truth for the version: pyproject.toml reads this
+#: attribute at build time, so the two cannot disagree.
+__version__ = "0.4.1"
+
+__all__ = ["dc", "ac", "fd", "tr", "t2s", "s2t", "pr", "pf", "gain", "th", "er", "port", "ex",
+           "AmbiguousValueError", "find_ambiguous_values", "__version__"]
