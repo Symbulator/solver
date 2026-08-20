@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.2 — 20 Aug 2026
+
+### Changed
+- **`i`, `I`, `j` and `J` are reserved for the imaginary unit in AC
+  only** (and in the AC mode of `th()`/`er()`/`port()`). Outside AC --
+  `dc()`, `fd()`, `tr()`, and DC-mode `th()`/`er()`/`port()` -- there is
+  no such thing as a complex component value, so those four letters are
+  now free to use as ordinary variable or element-value names there,
+  same as any other name. `safe_sympify()` and `hijacked_names()` take a
+  new `reserve_imaginary` keyword (default `True`, matching 0.4.0's
+  always-reserved behaviour) for callers that want the same
+  domain-aware rule.
+
+## 0.4.1 — 19 Aug 2026
+
+### Fixed
+- The `[a,b,c]` parallel-resistor shorthand is expanded correctly again.
+
+### Added
+- `time_samples()` and `bode_samples()`, powering the web front end's
+  "Plot vs. time" and "Bode plot" tools.
+
 ## 0.4.0 — 18 Aug 2026
 
 ### Changed (breaking)
