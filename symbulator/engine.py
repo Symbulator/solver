@@ -562,7 +562,17 @@ def solve_circuit(elements: List[Element], domain: str, omega=None,
             )
         sol = solutions[0]
         result = {str(k): sp.simplify(v) for k, v in sol.items()}
-        result.update({k: sp.simplify(v) for k, v in circuit.known.items()})
+        # "Third-level" quantities in `circuit.known` (a capacitor's
+        # current, an op-amp's output current, and the like) are stamped
+        # in terms of the node-voltage symbols `Circuit.v()` hands out
+        # *before* the system is solved -- so without this substitution
+        # they'd carry raw unknowns like v_3 straight into the answer,
+        # even though v_3 itself was solved to a number two lines above.
+        # On the original calculator these were evaluated on the fly as
+        # soon as they were asked for; here they only get one evaluation
+        # pass (this one), so it has to be the pass that plugs in the
+        # final solved values, not the raw stamp-time expression.
+        result.update({k: sp.simplify(v.subs(sol)) for k, v in circuit.known.items()})
 
     # Make sure every element and every node shows up in the result, even
     # elements whose current was solved as part of the system already.
