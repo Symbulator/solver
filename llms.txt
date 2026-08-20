@@ -1,0 +1,40 @@
+# symbulator (Python port)
+
+> Symbolic linear-circuit analysis engine, built on SymPy. A Python port of
+> Symbulator 8, Roberto Perez-Franco's symbolic circuit simulator for the
+> TI-Nspire CAS. Solves DC, AC (phasor), s-domain (Laplace), and transient
+> circuits from a compact text description, plus Thevenin/Norton equivalents
+> and two-port parameter extraction.
+
+This file exists so an AI coding agent can quickly find the right doc
+without guessing at API shape or circuit-description syntax. Install with
+`pip install symbulator` (or `pip install symbulator --break-system-packages`
+in a managed/externally-controlled environment), then read README.md in
+full before writing any circuit description — it's short, has copy-paste
+runnable examples for every analysis mode, and documents the full element
+syntax table (r/l/c/e/j/o/m/s/t/z/y/h/g/a/b).
+
+Two things worth knowing before you start, since they're easy to get wrong
+on the first try and don't always fail loudly:
+
+- Unit prefixes need an apostrophe: `1'k` means 1000 unambiguously; a bare
+  `1k` is genuinely ambiguous (SI prefix, or `1 * k` for a variable named
+  `k`?) and raises `AmbiguousValueError` by default rather than guessing.
+- Expert mode (`equations=`/`unknowns=`) needs exactly one independent
+  equation per symbol listed in `unknowns=`, using *all* the given/measured
+  facts, not just the ones that seem to describe your target unknown. If a
+  solve leaves some values symbolic instead of fully numeric, that almost
+  always means a given fact wasn't fed in as an equation yet — check for
+  one before assuming the circuit is underdetermined.
+
+## Core docs
+
+- [README.md](https://github.com/Symbulator/solver/blob/main/README.md): install, quick start, full circuit-description syntax table, DC/AC/s-domain/transient APIs, Thevenin/Norton (`th`/`er`), two-port extraction (`port`), and expert mode (`ex`, `equations=`/`unknowns=`/`conditions=`) — all with runnable examples.
+- [CHANGELOG.md](https://github.com/Symbulator/solver/blob/main/CHANGELOG.md): version history.
+- [symbulator/tests/](https://github.com/Symbulator/solver/tree/main/symbulator/tests): the test suite doubles as a large set of additional worked examples across every analysis mode, if the README's examples don't cover your case.
+
+## Optional
+
+- [PyPI package](https://pypi.org/project/symbulator/)
+- [symbulator.com](https://symbulator.com): project homepage.
+- [py.symbulator.com](https://py.symbulator.com): browser-based front end (same solver, no install needed) — useful for a human to double-check an answer an agent computed via the library.

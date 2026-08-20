@@ -1,13 +1,19 @@
 # symbulator (Python port)
 
 A Python/SymPy port of **Symbulator 8**, Roberto Perez-Franco's symbolic
-linear-circuit simulator for the TI-Nspire CX II CAS.
+linear-circuit simulator for the TI-Nspire CAS.
 
 All of the original's analysis tools are now ported: DC, AC (phasor),
 s-domain (Laplace), and transient analysis; Thevenin/Norton equivalents;
 two-port parameter extraction; and the expert-mode dispatcher. See
 **Scope** below for the handful of things that are intentionally
 simplified relative to the calculator version, and why.
+
+*AI coding agent?* This README is written to be read start to finish and
+followed directly — the Quick start and Circuit description syntax
+sections below have everything needed to write a correct circuit
+description on the first try. See also [llms.txt](llms.txt) for a short
+index and the two syntax details that are easiest to get wrong.
 
 ## Install
 
@@ -221,6 +227,18 @@ bare expression (treated as `expr = 0`). A symbolic *component value*
 you want solved (like `r_b` above) must be listed in `unknowns` -- the
 solver otherwise treats it as a fixed parameter, matching the
 original's separate "Add unknowns" prompt.
+
+**If a solve leaves some values symbolic instead of resolving to plain
+numbers**, the usual cause is one fewer independent equation than
+unknowns: count the symbols in `unknowns=` and make sure there's a
+matching equation for each, using every given/measured fact from the
+problem rather than only the ones that seem to describe the unknown
+you're focused on. A resistor's own equation (`V = R * I`) is nonlinear
+once both are unknown, which can occasionally make a fully-specified
+system harder to resolve symbolically in one call than the equation
+count alone would suggest; if that happens, solving the unknowns by
+hand from the given facts and then re-running the circuit with plain
+numbers is a reliable fallback.
 
 ## Scope: what's simplified vs. the calculator version
 
