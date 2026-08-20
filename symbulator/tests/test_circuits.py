@@ -145,6 +145,50 @@ def test_ac_complex_power_derived_quantity():
     assert approx_eq(res["ap_r1"], 10**2 / (2 * 50))
 
 
+def test_third_level_capacitor_current_is_fully_substituted():
+    # Regression test: a capacitor's current is stamped as a formula in
+    # terms of the node-voltage *symbols* (Circuit.v()) before the KCL
+    # system is solved -- so without a final substitution pass, it used
+    # to come back still containing e.g. v_3 even though v_3 itself was
+    # solved to a plain number two lines earlier in solve_circuit(). On
+    # the original calculator this kind of "third-level" quantity was
+    # evaluated on the fly; here it needs one explicit substitution pass
+    # at the end. Reproduces the series RLC example from the built-in
+    # examples list, reported against symbulator 0.4.2.
+    res = ac("e1,1,0,10:r1,1,2,100:l1,2,3,0.1:c1,3,0,1e-6", omega=1000)
+    assert res.v("3").free_symbols == set()
+    assert res.i("c1").free_symbols == set()
+    # i = (v1 - v2) * j*omega*C, checked against the independently
+    # solved v_3 rather than re-deriving it from scratch.
+    expected_i = res.v("3") * (sp.I * 1000 * 1e-6)
+    assert approx_eq(res.i("c1"), expected_i)
+
+
+def test_third_level_complex_power_has_no_leftover_conjugate():
+    # Same bug, one layer further downstream: complex power is
+    # V * conjugate(I), computed in analysis.py from the (now-fixed)
+    # branch current -- confirm no symbolic conjugate(v_3) leaks into
+    # the answer, and that the number matches a manual V*conj(I)/2.
+    res = ac("e1,1,0,10:r1,1,2,100:l1,2,3,0.1:c1,3,0,1e-6", omega=1000)
+    s_c1 = res["s_c1"]
+    assert s_c1.free_symbols == set()
+    expected_s = sp.simplify(res.v("3") * sp.conjugate(res.i("c1")) / 2)
+    assert approx_eq(s_c1, expected_s)
+    # A pure capacitor stores/returns energy but dissipates none, so its
+    # complex power should be purely reactive (zero real part).
+    assert approx_eq(sp.re(s_c1), 0)
+
+
+def test_third_level_dependent_current_source_is_fully_substituted():
+    # Same class of bug, different element: a dependent current source's
+    # value can reference another element's *current* by name (not just
+    # capacitors referencing node voltages), and was stamped into
+    # `known` the same un-substituted way.
+    res = dc("e1,1,0,10:r1,1,2,1000:j1,2,0,0.5*i_r1:r2,2,0,1000")
+    assert res.i("j1").free_symbols == set()
+    assert approx_eq(res.i("j1"), 0.5 * res.i("r1"))
+
+
 def test_zero_valued_capacitor_is_open_not_short_dc():
     # Regression test for a bug found in the original TI-Basic source:
     # a 0F capacitor must behave as an open circuit, not a short.
