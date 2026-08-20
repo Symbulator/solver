@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.3 — 21 Aug 2026
+
+### Fixed
+- **"Third-level" quantities (a capacitor's current, a dependent
+  current source's value, and anything derived from them like complex
+  power) could come back still containing a raw node-voltage or
+  branch-current symbol** -- e.g. `i_c1 = 0.001j*v_3` even though `v_3`
+  itself was correctly solved to a plain number. These quantities are
+  stamped in terms of the symbols `Circuit.v()` hands out *before* the
+  KCL system is solved, and were never substituted with the final
+  solved values afterwards -- on the original calculator they were
+  evaluated on the fly instead. `solve_circuit()` now substitutes the
+  solved system into every such quantity as its one evaluation pass, so
+  they always come back fully resolved, same as every other answer.
+
 ## 0.4.2 — 20 Aug 2026
 
 ### Changed
