@@ -74,6 +74,10 @@ class Circuit:
         self.suffix = suffix
         self.elements = elements
         self.domain = domain
+        # i, I, j and J only mean the imaginary unit in AC, where a
+        # source or component value can genuinely be complex. In dc/fd
+        # they're free to use as ordinary variable names.
+        self.reserve_imaginary = (domain == "ac")
         self.omega = omega if omega is not None else sp.Symbol("omega", real=True)
         self.s = sp.Symbol("s")
         self.params = params or {}
@@ -99,7 +103,8 @@ class Circuit:
         expand any `'k`-style unit shorthand, then parse it through the
         restricted namespace in si_prefix.safe_sympify (so stray letters
         like "Q" become plain symbols, not SymPy internals)."""
-        return safe_sympify(expand_value(raw, self.suffix))
+        return safe_sympify(expand_value(raw, self.suffix),
+                            reserve_imaginary=self.reserve_imaginary)
 
     def v(self, node: str) -> sp.Expr:
         """Return the (symbolic) voltage at `node`, registering it as an
@@ -346,7 +351,8 @@ class Circuit:
         its value supplied later via `conditions`."""
         p = self.params.get(e.name)
         if p:
-            return tuple(safe_sympify(expand_value(str(p[ij]), self.suffix))
+            return tuple(safe_sympify(expand_value(str(p[ij]), self.suffix),
+                                      reserve_imaginary=self.reserve_imaginary)
                          for ij in ("11", "12", "21", "22"))
         return (_sym(f"{e.name}11"), _sym(f"{e.name}12"),
                 _sym(f"{e.name}21"), _sym(f"{e.name}22"))
@@ -436,12 +442,13 @@ class Circuit:
     _stamp_b = _stamp_two_port
 
 
-def _parse_extra_equation(raw) -> sp.Eq:
+def _parse_extra_equation(raw, reserve_imaginary: bool = True) -> sp.Eq:
     """Turn a user-supplied extra equation (expert mode) into a sympy Eq.
     Accepts "lhs = rhs" strings (with the calculator's 'k-style unit
     shorthand -- the original ran its prefix expander over added
     equations too), bare expressions (treated as expr = 0), or sympy
-    Eq/Expr objects directly."""
+    Eq/Expr objects directly. `reserve_imaginary` should match the
+    domain the equation is being added to (see `solve_circuit`)."""
     if isinstance(raw, sp.Eq):
         return raw
     if isinstance(raw, sp.Expr):
@@ -449,8 +456,9 @@ def _parse_extra_equation(raw) -> sp.Eq:
     text = expand_shorthand(str(raw))
     if "=" in text:
         lhs, rhs = text.split("=", 1)
-        return sp.Eq(safe_sympify(lhs), safe_sympify(rhs))
-    return sp.Eq(safe_sympify(text), 0)
+        return sp.Eq(safe_sympify(lhs, reserve_imaginary=reserve_imaginary),
+                     safe_sympify(rhs, reserve_imaginary=reserve_imaginary))
+    return sp.Eq(safe_sympify(text, reserve_imaginary=reserve_imaginary), 0)
 
 
 def solve_circuit(elements: List[Element], domain: str, omega=None,
@@ -492,6 +500,11 @@ def solve_circuit(elements: List[Element], domain: str, omega=None,
             raise AmbiguousValueError(found)
         suffix = "si"  # nothing ambiguous left; expansion choice is moot
 
+    # i, I, j and J are only reserved as the imaginary unit in AC -- see
+    # Circuit.reserve_imaginary. Expert-mode equations/conditions are
+    # parsed against the same rule as the circuit they're attached to.
+    reserve_imaginary = (domain == "ac")
+
     circuit = Circuit(elements, domain, omega=omega, params=params,
                       suffix=suffix)
     circuit.stamp_all()
@@ -502,7 +515,8 @@ def solve_circuit(elements: List[Element], domain: str, omega=None,
             if sym not in circuit.unknowns:
                 circuit.unknowns.append(sym)
     if equations:
-        extra_eqs = [_parse_extra_equation(e) for e in equations]
+        extra_eqs = [_parse_extra_equation(e, reserve_imaginary=reserve_imaginary)
+                     for e in equations]
         circuit.equations.extend(extra_eqs)
         # Convenience beyond the original: a brand-new symbol appearing
         # in an extra equation (e.g. "pout = v_2*i_r2") becomes an
@@ -524,9 +538,10 @@ def solve_circuit(elements: List[Element], domain: str, omega=None,
                 raise CircuitError(
                     f"Condition '{raw}' must have the form name = value.")
             lhs, rhs = text.split("=", 1)
-            subs_map[safe_sympify(lhs)] = safe_sympify(rhs)
+            subs_map[safe_sympify(lhs, reserve_imaginary=reserve_imaginary)] = \
+                safe_sympify(rhs, reserve_imaginary=reserve_imaginary)
         circuit.equations = [eq.subs(subs_map) for eq in circuit.equations]
-        circuit.known = {k: safe_sympify(str(v)).subs(subs_map)
+        circuit.known = {k: safe_sympify(str(v), reserve_imaginary=reserve_imaginary).subs(subs_map)
                          for k, v in circuit.known.items()}
         circuit.unknowns = [u for u in circuit.unknowns if u not in subs_map]
 

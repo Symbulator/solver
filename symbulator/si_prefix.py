@@ -151,16 +151,24 @@ def expand_shorthand(text: str) -> str:
 _IMAGINARY_NAMES = ("i", "I", "j", "J")
 
 #: Names a value is allowed to mean something special by.
-def _allowed_namespace():
+def _allowed_namespace(reserve_imaginary: bool = True):
     """Build the small dict of names `safe_sympify`/`hijacked_names` treat
     as meaning something other than a plain variable: a handful of
     constants (pi, oo) and functions (trig, exp/log, Heaviside/DiracDelta
     for transient sources, Min/Max) that a circuit description could
-    genuinely need, plus the four imaginary-unit spellings. Built fresh
-    on each call rather than as a module-level constant purely so the
-    `import sympy as sp` stays local to the handful of functions that
-    need it, matching this module's style of keeping SymPy import cost
-    out of code paths that don't touch it."""
+    genuinely need, plus -- when `reserve_imaginary` is true -- the four
+    imaginary-unit spellings. Built fresh on each call rather than as a
+    module-level constant purely so the `import sympy as sp` stays local
+    to the handful of functions that need it, matching this module's
+    style of keeping SymPy import cost out of code paths that don't
+    touch it.
+
+    `reserve_imaginary` is false outside AC analysis (and outside the AC
+    mode of the equivalence tools): i, I, j and J only ever mean
+    something to a circuit when a source or component value can be
+    complex, which only happens in AC, so there's no reason to take
+    those four names away from someone writing a DC or s-domain
+    circuit."""
     import sympy as sp
     from .utils import pr
 
@@ -181,27 +189,36 @@ def _allowed_namespace():
         # "'Symbol' object is not callable" once it reaches sympify.
         "pr": pr,
     }
-    # i, I, j and J all mean the imaginary unit. Reserving all four is
-    # what lets `3*j` be unambiguous: no variable may use those names,
-    # so there is nothing else they could mean.
-    for name in _IMAGINARY_NAMES:
-        ns[name] = sp.I
+    if reserve_imaginary:
+        # i, I, j and J all mean the imaginary unit. Reserving all four
+        # is what lets `3*j` be unambiguous: no variable may use those
+        # names, so there is nothing else they could mean.
+        for name in _IMAGINARY_NAMES:
+            ns[name] = sp.I
     return ns
 
 
 _IDENT_RE = re.compile(r"(?<![\w.])([A-Za-z_]\w*)")
 
 
-def hijacked_names(text: str):
+def hijacked_names(text: str, reserve_imaginary: bool = True):
     """Names in `text` that SymPy would quietly reinterpret as something
     other than a variable -- `Q`, `N`, `beta`, `E` and friends. Returned
-    so the caller can tell the user they were read as plain variables."""
+    so the caller can tell the user they were read as plain variables.
+
+    `reserve_imaginary` must match whatever was passed to `safe_sympify`
+    for the same text, so this never reports i/I/j/J as "hijacked" when
+    they were in fact read as ordinary variables (outside AC)."""
     import sympy as sp
 
-    allowed = _allowed_namespace()
+    allowed = _allowed_namespace(reserve_imaginary)
     found = []
     for name in dict.fromkeys(_IDENT_RE.findall(text)):
         if name in allowed:
+            continue
+        if not reserve_imaginary and name in _IMAGINARY_NAMES:
+            # Deliberately plain symbols here, not a SymPy built-in that
+            # got in the way -- so this isn't a "hijack" to report.
             continue
         looked_up = getattr(sp, name, None)
         if looked_up is not None and not isinstance(looked_up, sp.Symbol):
@@ -209,12 +226,17 @@ def hijacked_names(text: str):
     return found
 
 
-def safe_sympify(text: str):
+def safe_sympify(text: str, reserve_imaginary: bool = True):
     """sympify() restricted to the namespace above: every identifier that
-    isn't an intended constant or function becomes a plain Symbol."""
+    isn't an intended constant or function becomes a plain Symbol.
+
+    `reserve_imaginary` (default true, for backward compatibility with
+    every caller that isn't domain-aware) controls whether i/I/j/J parse
+    as the imaginary unit or as ordinary symbols -- pass false for any
+    analysis where complex values don't apply (dc, fd, tr)."""
     import sympy as sp
 
-    ns = _allowed_namespace()
+    ns = _allowed_namespace(reserve_imaginary)
     for name in set(_IDENT_RE.findall(text)):
         ns.setdefault(name, sp.Symbol(name))
     return sp.sympify(text, locals=ns)
