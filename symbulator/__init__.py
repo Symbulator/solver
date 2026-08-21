@@ -37,7 +37,7 @@ from .plotting import time_samples, bode_samples, PlotError
 
 #: The single source of truth for the version: pyproject.toml reads this
 #: attribute at build time, so the two cannot disagree.
-__version__ = "0.4.4"
+__version__ = "0.4.5"
 
 __all__ = ["dc", "ac", "fd", "tr", "t2s", "s2t", "pr", "pf", "gain", "th", "er", "port", "ex",
            "time_samples", "bode_samples", "PlotError",

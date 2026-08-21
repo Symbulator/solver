@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.4.5 — 21 Aug 2026
+
+### Fixed
+- **An expert-mode equation written on a derived quantity was silently
+  discarded** -- `r_e`, `p_r1`, `v_r2`, `z_e` and the like. Those are
+  computed by `analysis._derived()` *after* `solve_circuit()` returns, as
+  algebra on the finished solution, so the solver had never heard of the
+  names. The convenience that turns a brand-new symbol in an extra
+  equation into an unknown then registered each one as a free variable
+  that happened to share the name: `Eq(r_e, 12000)` was satisfied by
+  setting that phantom to 12000, which cost the system nothing and told
+  the circuit nothing. The answer came back correct but one constraint
+  short -- parametrized in a leftover node voltage instead of resolved to
+  numbers -- with nothing raised, nothing logged, and a result object
+  that looked entirely normal. `engine._derived_definition()` now
+  recognises a symbol naming a derived quantity of an element actually
+  present in the circuit and stamps in the equation defining it in terms
+  of the system's own unknowns, so the constraint lands on the circuit.
+  The `r_`/`z_` forms are written multiplied out rather than as a
+  division, keeping the system polynomial and stopping a zero current
+  from putting a division by zero into it. Matching is against real
+  element names rather than a prefix pattern, so ordinary labels like
+  `pout`, `vin` and `r_b` are untouched unless they genuinely collide
+  with an element in that circuit, and a name listed in `unknowns` is
+  still registered first and left alone -- an explicit list continues to
+  win.
+- **An equation on a current held in `circuit.known` was discarded the
+  same way** -- a `j` source's current, and a capacitor's in AC, are
+  recorded rather than solved for, so `i_j1 = 0.005` became another
+  phantom. Extra equations are now substituted against `known` before
+  being stamped, turning that into a real constraint on the source's
+  symbolic value. An equation left with nothing in it afterwards is
+  dropped as redundant; one left as a flat contradiction now says so
+  plainly instead of surfacing later as "could not solve the system".
+
+### Changed
+- **The AC power quantities refuse an expert-mode equation instead of
+  ignoring one.** `s_`, `p_` and `ap_` in the AC domain are defined
+  through `v * conjugate(i)`, and conjugation is not something
+  `sympy.solve` can carry through a system, so there is no definition to
+  stamp. They now raise `CircuitError` naming the quantity and pointing
+  at the `v_`/`i_` restatement that does work. No working call breaks:
+  none of these ever produced a constrained answer.
+
 ## 0.4.4 — 21 Aug 2026
 
 ### Added
