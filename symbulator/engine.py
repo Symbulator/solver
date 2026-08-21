@@ -461,6 +461,97 @@ def _parse_extra_equation(raw, reserve_imaginary: bool = True) -> sp.Eq:
     return sp.Eq(safe_sympify(text, reserve_imaginary=reserve_imaginary), 0)
 
 
+# Prefixes `analysis._derived` uses when it names a post-solve quantity.
+# Ordered longest-first so "ap_e" is read as ap/e, not as a/p_e.
+_DERIVED_PREFIXES = ("ap", "v", "p", "r", "z", "s")
+
+
+def _ac_power_unsupported(name: str, element: str) -> "CircuitError":
+    """The error raised when an expert-mode equation is written on one of
+    the AC power quantities. They are the one family of derived quantity
+    with no polynomial definition -- s = v * conj(i), and the real powers
+    are its real part -- and complex conjugation is not something
+    sympy.solve can carry through a system. Refusing here is deliberate:
+    the alternative is the silent phantom-unknown this whole function
+    exists to prevent."""
+    return CircuitError(
+        f"Cannot add an expert-mode equation on '{name}': the AC power "
+        f"quantities (s_, p_, ap_) are defined through complex conjugation, "
+        f"which cannot be solved as part of the system. Restate the "
+        f"constraint using node voltages (v_1, v_2, ...) and element "
+        f"currents (i_{element}, ...), which are solved for directly."
+    )
+
+
+def _derived_definition(circuit: "Circuit", name: str, domain: str):
+    """If `name` is one of the quantities `analysis._derived` computes
+    *after* the solve -- a branch voltage v_<element>, a power p_<element>,
+    or the impedance r_/z_<element> a source sees -- return
+    `(defining_equation, symbol)` expressing it in terms of the system's
+    own unknowns. Return None if `name` is not one of those, in which case
+    the caller treats it as an ordinary new unknown, as before.
+
+    This exists because those quantities are derived after the fact and so
+    are invisible to the solver. Without a definition, an equation like
+    "r_e = 12000" introduces a free variable that happens to share the
+    name, satisfies itself, and quietly leaves the circuit one equation
+    short -- the answer comes back correct but parametrized, with no
+    indication that the constraint did nothing. With the definition
+    stamped in, the equation constrains the circuit as the user meant.
+
+    The formulas here mirror `analysis._derived` exactly; test_expert.py
+    checks the two agree by asking for a quantity both ways."""
+    for prefix in _DERIVED_PREFIXES:
+        head = prefix + "_"
+        if not name.startswith(head):
+            continue
+        element = circuit._by_name.get(name[len(head):])
+        if element is None:
+            continue          # not an element of this circuit; keep looking
+
+        i_key = f"i_{element.name}"
+        # A `j` source's current, and a capacitor's in AC, are recorded in
+        # `known` rather than solved for; either way this is the same
+        # expression `_derived` would later use.
+        i = circuit.known.get(i_key) or circuit.i_symbol(element.name)
+        sym = _sym(name)
+
+        if element.kind == "o":
+            # Op-amp power is measured at the output node, on the current
+            # the amplifier drives out of it.
+            if prefix == "p" and domain != "ac":
+                return sp.Eq(sym, circuit.v(element.fields[2]) * (-i)), sym
+            if domain == "ac" and prefix in ("s", "ap", "p"):
+                raise _ac_power_unsupported(name, element.name)
+            return None
+
+        if element.kind not in "ejrcl":
+            return None
+        vdiff = circuit.v(element.n1) - circuit.v(element.n2)
+
+        if prefix == "v":
+            return sp.Eq(sym, vdiff), sym
+        if prefix == "p":
+            if domain == "ac":
+                raise _ac_power_unsupported(name, element.name)
+            return sp.Eq(sym, vdiff * i), sym
+        if prefix in ("s", "ap"):
+            if domain == "ac":
+                raise _ac_power_unsupported(name, element.name)
+            return None       # s_/ap_ are not derived outside ac
+        if prefix in ("r", "z"):
+            # Only sources get one, and only in their own domain. Written
+            # as sym * (-i) = vdiff rather than sym = vdiff / (-i) so the
+            # equation stays polynomial and a zero current does not put a
+            # division by zero into the system.
+            if element.kind not in "ej":
+                return None
+            if (prefix == "r") != (domain != "ac"):
+                return None
+            return sp.Eq(sym * (-i), vdiff), sym
+    return None
+
+
 def solve_circuit(elements: List[Element], domain: str, omega=None,
                    params: Optional[Dict[str, Dict[str, object]]] = None,
                    equations=None, unknowns=None, conditions=None,
@@ -517,18 +608,57 @@ def solve_circuit(elements: List[Element], domain: str, omega=None,
     if equations:
         extra_eqs = [_parse_extra_equation(e, reserve_imaginary=reserve_imaginary)
                      for e in equations]
+        # Quantities recorded in `known` (a `j` source's current, a
+        # capacitor's current in AC) are not solved for, so an equation
+        # naming one would otherwise introduce a same-named free variable
+        # instead of constraining anything. Substituting the stamped
+        # expression turns "i_j1 = 5" into a real constraint on whatever
+        # that current is made of.
+        if circuit.known:
+            known_map = {_sym(k): v for k, v in circuit.known.items()}
+            extra_eqs = [eq.subs(known_map) for eq in extra_eqs]
+        # That substitution can leave an equation with nothing left in it
+        # ("i_j1 = 5" on a 5 A source): either a tautology, which sympy
+        # cannot accept in a system and which constrains nothing anyway,
+        # or a flat contradiction, which is worth saying plainly rather
+        # than letting it surface as "could not solve the system". Only
+        # equations with no symbols left are checked, so the simplify
+        # cost never falls on a real one.
+        kept = []
+        for raw, eq in zip(equations, extra_eqs):
+            if eq.free_symbols:
+                kept.append(eq)
+                continue
+            if sp.simplify(eq) is sp.false:
+                raise CircuitError(
+                    f"Equation '{raw}' contradicts the circuit as described."
+                )
+        extra_eqs = kept
         circuit.equations.extend(extra_eqs)
         # Convenience beyond the original: a brand-new symbol appearing
         # in an extra equation (e.g. "pout = v_2*i_r2") becomes an
         # unknown automatically, so simple derived-quantity equations
-        # don't require the separate unknowns list.
+        # don't require the separate unknowns list. A symbol that names
+        # one of the quantities computed after the solve gets its
+        # defining equation stamped in as well, so that the equation
+        # constrains the circuit rather than a variable of the same name
+        # -- see `_derived_definition`. Anything the caller listed under
+        # `unknowns` is already in `existing` and is left alone, so an
+        # explicit list still wins over this inference.
         reserved = {"s", "t", str(circuit.omega)}
         existing = {str(u) for u in circuit.unknowns}
         for eq in extra_eqs:
             for sym in sorted(eq.free_symbols, key=str):
-                if str(sym) not in existing and str(sym) not in reserved:
+                if str(sym) in existing or str(sym) in reserved:
+                    continue
+                definition = _derived_definition(circuit, str(sym), domain)
+                if definition is not None:
+                    def_eq, def_sym = definition
+                    circuit.equations.append(def_eq)
+                    circuit.unknowns.append(def_sym)
+                else:
                     circuit.unknowns.append(sym)
-                    existing.add(str(sym))
+                existing.add(str(sym))
 
     if conditions:
         subs_map = {}
