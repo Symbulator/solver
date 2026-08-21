@@ -72,6 +72,48 @@ def _node_v(solution: Dict[str, sp.Expr], node: str) -> sp.Expr:
     return solution.get(f"v_{node}", sp.Symbol(f"v_{node}"))
 
 
+def _clean_noise(expr: sp.Expr, rel_tol: float = 1e-9) -> sp.Expr:
+    """Zero out whichever part (real or imaginary) of a concrete complex
+    answer is negligible next to the other. Multiplying and dividing
+    already-computed floats -- as this module does to get power and
+    impedance -- routinely leaves a residue of floating-point noise
+    behind: an ideal inductor's complex power is purely reactive in
+    reality, but a raw float computation comes back as something like
+    -7.6e-19 + 0.0061j. Left alone, that residue survives every
+    rounding/display mode (including "exact") and each one shows its
+    own leftover digits instead of agreeing the offending part is zero.
+
+    `rel_tol` is relative to the larger of the two parts, not an
+    absolute cutoff -- 1e-9 is far above the ~1e-15 noise floor of
+    double-precision arithmetic, and far below any part a real circuit
+    would produce on purpose. Only a plain number with no free symbols
+    is touched; a symbolic answer (e.g. an expression in r_a, r_b) is
+    returned untouched, since there's no single scale to judge
+    "negligible" against, and quantities the solver already reports as
+    exact (rationals, integers) are left alone too since they can't
+    carry float noise in the first place."""
+    if not getattr(expr, "is_number", False) or expr.free_symbols:
+        return expr
+    if expr.is_rational:
+        return expr
+    try:
+        val = complex(expr)
+    except (TypeError, ValueError):
+        return expr
+    scale = max(abs(val.real), abs(val.imag))
+    if scale == 0:
+        return expr
+    re = val.real if abs(val.real) > rel_tol * scale else 0.0
+    im = val.imag if abs(val.imag) > rel_tol * scale else 0.0
+    if re == val.real and im == val.imag:
+        return expr  # nothing negligible, keep the original form as-is
+    if im == 0:
+        return sp.Float(re)
+    if re == 0:
+        return sp.Float(im) * sp.I
+    return sp.Float(re) + sp.Float(im) * sp.I
+
+
 def _seen_impedance(vdiff: sp.Expr, i: sp.Expr):
     """v / (-i) for the impedance/resistance a source sees, tolerating a
     zero current. A source pushing no current is looking into an open
@@ -114,7 +156,7 @@ def _derived(elements, domain: str, solution: Dict[str, sp.Expr],
                 s = vdiff * sp.conjugate(i)
                 if not use_rms:
                     s = s / 2
-                s = sp.simplify(s)
+                s = _clean_noise(sp.simplify(s))
                 out[f"s_{e.name}"] = s
                 if e.kind in "ejr":
                     p = sp.simplify(sp.re(s))
@@ -122,7 +164,7 @@ def _derived(elements, domain: str, solution: Dict[str, sp.Expr],
                     if e.kind in "ej":
                         z = _seen_impedance(vdiff, i)
                         if z is not None:
-                            out[f"z_{e.name}"] = z
+                            out[f"z_{e.name}"] = _clean_noise(z)
             else:  # dc
                 out[f"p_{e.name}"] = sp.simplify(vdiff * i)
                 if e.kind in "ej":
@@ -140,7 +182,7 @@ def _derived(elements, domain: str, solution: Dict[str, sp.Expr],
                 s = vout * sp.conjugate(-i)
                 if not use_rms:
                     s = s / 2
-                s = sp.simplify(s)
+                s = _clean_noise(sp.simplify(s))
                 out[f"s_{e.name}"] = s
                 out[f"p_{e.name}" if use_rms else f"ap_{e.name}"] = sp.simplify(sp.re(s))
             else:

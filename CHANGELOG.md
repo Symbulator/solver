@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.4 — 21 Aug 2026
+
+### Added
+- **`parse_circuit()` and `expand_shorthand()` take a new `expand_si`
+  / `si` flag (default `True`, unchanged behaviour)** that, when set to
+  `False`, leaves SI-prefix shorthand (`4.7'M`) in each value field
+  exactly as typed instead of expanding it to a literal number. This is
+  for callers that only want to echo a circuit description back to the
+  user -- e.g. after normalising `i`/`I` to `j`, or after resolving a
+  bare ambiguous suffix -- where the notation the person actually typed
+  is worth more to them than the number it stands for. Solving still
+  goes through the normal expansion (`expand_si=True`) as its own,
+  separate parse, so this has no effect on any circuit's actual answers.
+
+### Fixed
+- **An AC element whose complex power should come back purely real or
+  purely imaginary could instead show a tiny leftover in the other
+  part** -- e.g. a resistor's power reading `0.006098 + 4.445e-18j`
+  instead of plain `0.006098`, or an inductor's reading
+  `-7.589e-19 + 0.006098j` instead of plain `0.006098j`. That leftover
+  is ordinary floating-point noise from multiplying already-computed
+  complex floats, and every rounding/display mode showed its own
+  version of it -- including "exact", which showed the ugliest,
+  full-precision version. `dc()`/`ac()` now recognise when one part of
+  a complex power or impedance is negligible next to the other (with
+  plenty of margin above the actual noise floor) and zero it out, so
+  both parts are held to the same standard instead of each showing
+  whatever noise it happened to accumulate. Exact/rational answers
+  (e.g. from a circuit with no floats in it at all) are untouched, since
+  they can't carry this kind of noise in the first place.
+
 ## 0.4.3 — 21 Aug 2026
 
 ### Fixed

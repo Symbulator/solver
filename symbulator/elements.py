@@ -177,17 +177,26 @@ def _split_fields(raw: str) -> List[str]:
     return fields
 
 
-def parse_circuit(desc: str) -> List[Element]:
+def parse_circuit(desc: str, expand_si: bool = True) -> List[Element]:
     """Parse a Symbulator-style circuit description string into a list
     of Element objects. Raises CircuitError on malformed input (mirrors
-    symbv8s1 + symbv8s2)."""
+    symbv8s1 + symbv8s2).
+
+    `expand_si=False` parses the same elements but leaves SI-prefix
+    shorthand (`4.7'M`) in each field as typed, instead of expanding it
+    to a literal number. Use this when the parsed elements are only
+    going to be echoed back to the user (e.g. to rebuild the circuit
+    description after normalizing i/I to j or resolving an ambiguous
+    bare suffix) -- the SI notation is worth more to a person reading it
+    back than the number it stands for, and it still gets expanded the
+    normal way (`expand_si=True`, the default) at actual solve time."""
     raw_elements = _split_elements(desc)
 
     elements: List[Element] = []
     seen_names = set()
 
     for raw in raw_elements:
-        raw = expand_shorthand(raw)
+        raw = expand_shorthand(raw, si=expand_si)
         parts = _split_fields(raw)
         if not parts or parts[0] == "":
             raise CircuitError(f"Malformed element description: '{raw}'.")

@@ -179,6 +179,30 @@ def test_third_level_complex_power_has_no_leftover_conjugate():
     assert approx_eq(sp.re(s_c1), 0)
 
 
+def test_ac_complex_power_noise_is_zeroed_not_just_small():
+    # Regression test for a bug reported against 0.4.3: the *negligible*
+    # part of a purely-real or purely-imaginary complex power wasn't an
+    # exact zero, just floating-point noise close to zero (e.g.
+    # `4.445e-18j` next to a resistor's real power, or `-7.589e-19`
+    # next to an inductor's reactive power). approx_eq-style tolerance
+    # checks (see test_third_level_complex_power_has_no_leftover_
+    # conjugate above) don't catch this, because the noise genuinely is
+    # tiny -- the bug is that it was never rounded to a clean, exact 0,
+    # so every display mode (including "exact") showed its own leftover
+    # digits instead of agreeing the offending part is zero.
+    res = ac("e1,1,0,10:r1,1,2,100:l1,2,3,0.1:c1,3,0,1e-6", omega=1000)
+    # A resistor's complex power is purely real: the imaginary part
+    # must be an exact 0, not merely close to it.
+    s_r1 = res["s_r1"]
+    assert sp.im(s_r1) == 0
+    assert approx_eq(sp.re(s_r1), res["ap_r1"])
+    # An inductor's complex power is purely reactive: the real part
+    # must be an exact 0.
+    s_l1 = res["s_l1"]
+    assert sp.re(s_l1) == 0
+    assert sp.im(s_l1) != 0  # still genuinely reactive, not zeroed out entirely
+
+
 def test_third_level_dependent_current_source_is_fully_substituted():
     # Same class of bug, different element: a dependent current source's
     # value can reference another element's *current* by name (not just

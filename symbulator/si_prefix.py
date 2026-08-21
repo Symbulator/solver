@@ -110,19 +110,26 @@ def expand_value(text: str, suffix: str = "si") -> str:
     return expand_shorthand(text)
 
 
-def expand_shorthand(text: str) -> str:
+def expand_shorthand(text: str, si: bool = True) -> str:
     """Expand `'k`/`'M`/... unit-prefix shorthand and `[...]` parallel-
     impedance shortcuts in `text`, mirroring symbv8si.
 
     `[a,b,c]` becomes `pr(a,b,c)` (a call into utils.pr), matching how
     the original turned `[...]` into `s\\pr({...})`.
-    """
+
+    `si=False` skips the `'`-prefix substitution (and its "unrecognized
+    shorthand" check) while still doing the `[...]` rewrite, which is
+    needed unconditionally so `_split_fields` can tell the difference
+    between the shortcut's inner commas and an element's own field
+    commas. This lets a caller that only wants the circuit *echoed back*
+    (not solved) keep the SI-prefix notation the user actually typed --
+    it is only expanded to a literal number just before solving."""
     result = text
 
     if "[" in result:
         result = result.replace("[", "pr(").replace("]", ")")
 
-    if "'" in result:
+    if si and "'" in result:
         for old, new in _SI_PREFIXES:
             result = result.replace(old, new)
         if "'" in result:

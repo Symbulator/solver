@@ -4,7 +4,10 @@ that a value like "1k" is ambiguous by default and raises, that the
 si/var suffix policies each read it the way they claim to, that the two
 explicit spellings (1'k / 1*k) are never ambiguous regardless of policy,
 that find_ambiguous_values() reports every occurrence, and that neither
-node names nor scientific notation (8E3) get mistaken for the suffix."""
+node names nor scientific notation (8E3) get mistaken for the suffix.
+Also covers parse_circuit's/expand_shorthand's `expand_si` flag, which
+lets a caller echo a circuit back with its SI-prefix notation intact
+instead of expanded to a literal number."""
 
 import sys
 import os
@@ -15,6 +18,7 @@ import sympy as sp
 import pytest
 
 from symbulator import dc, find_ambiguous_values, AmbiguousValueError
+from symbulator.elements import parse_circuit
 
 
 DIVIDER = "e1,1,0,5:r1,1,2,1k:r2,2,0,1k"
@@ -65,3 +69,27 @@ def test_scientific_notation_is_not_flagged():
     assert find_ambiguous_values("e1,1,0,5:r1,1,0,8E3") == []
     res = dc("e1,1,0,5:r1,1,0,8E3")
     assert abs(complex(res.i("r1")) - complex(5 / 8000)) < 1e-12
+
+
+def test_expand_si_false_preserves_the_typed_notation():
+    # A caller that only wants to echo the circuit back (not solve it)
+    # can ask parse_circuit to leave "4.7'M" exactly as typed.
+    elements = parse_circuit("r1,1,0,4.7'M", expand_si=False)
+    assert elements[0].value == "4.7'M"
+
+
+def test_expand_si_true_is_still_the_default_and_solves_normally():
+    # The default behaviour (used at actual solve time) is unchanged:
+    # the shorthand is expanded to a literal number, not left as typed.
+    elements = parse_circuit("r1,1,0,4.7'M")
+    assert "'" not in elements[0].value
+    res = dc("e1,1,0,5:r1,1,0,4.7'M")
+    assert abs(complex(res.i("r1")) - complex(5 / 4.7e6)) < 1e-12
+
+
+def test_expand_si_false_still_expands_bracket_shorthand():
+    # The `[...]` -> `pr(...)` rewrite always happens regardless of
+    # `expand_si`, since `_split_fields` needs it to tell the shortcut's
+    # inner commas apart from an element's own field commas.
+    elements = parse_circuit("r1,1,0,[1k,2k]", expand_si=False)
+    assert elements[0].value == "pr(1k,2k)"
