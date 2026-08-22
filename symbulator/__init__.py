@@ -21,24 +21,29 @@ inductance, ideal transformers, short circuits, and grounded two-port
     bode_samples()      numeric (freq, mag_dB, phase_deg) samples of a fd()
                         result across a frequency sweep, for a Bode plot
 
+Time-domain answers are written in `symbulator.t` (a SymPy symbol declared
+positive, which the inverse Laplace transform needs) and s-domain ones in
+`symbulator.s`. Use those, or `Result.at(t=0.001)`, to substitute -- a
+freshly made `Symbol("t")` is a different symbol and will not match.
+
 Answers are symbolic. Component values may be numbers, SI-prefixed
 values (`4.7'k`), or symbols -- give a resistance as `x` and the answers
 come back in terms of `x`.
 """
 
 from .analysis import dc, ac, fd
-from .si_prefix import AmbiguousValueError
+from .si_prefix import AmbiguousValueError, UnsafeExpressionError
 from .elements import find_ambiguous_values
 from .utils import pr, pf, gain
 from .equiv import th, er, port
-from .laplace import tr, t2s, s2t
+from .laplace import tr, t2s, s2t, t, s
 from .dispatch import ex
 from .plotting import time_samples, bode_samples, PlotError
 
 #: The single source of truth for the version: pyproject.toml reads this
 #: attribute at build time, so the two cannot disagree.
-__version__ = "0.4.5"
+__version__ = "0.4.6"
 
-__all__ = ["dc", "ac", "fd", "tr", "t2s", "s2t", "pr", "pf", "gain", "th", "er", "port", "ex",
+__all__ = ["dc", "ac", "fd", "tr", "t2s", "s2t", "t", "s", "pr", "pf", "gain", "th", "er", "port", "ex",
            "time_samples", "bode_samples", "PlotError",
-           "AmbiguousValueError", "find_ambiguous_values", "__version__"]
+           "AmbiguousValueError", "UnsafeExpressionError", "find_ambiguous_values", "__version__"]

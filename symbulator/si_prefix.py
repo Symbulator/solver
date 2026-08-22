@@ -16,6 +16,7 @@ The `[...]` shortcut is implemented; the fd-only `{...}` shortcut is not
 
 from __future__ import annotations
 
+import ast
 import re
 
 # (old substring, new substring) pairs, applied in this order -- mirrors
@@ -233,6 +234,89 @@ def hijacked_names(text: str, reserve_imaginary: bool = True):
     return found
 
 
+class UnsafeExpressionError(ValueError):
+    """A value or equation contains Python syntax that is not arithmetic."""
+
+
+_SAFE_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod)
+_SAFE_UNARY = (ast.UAdd, ast.USub)
+
+# The syntax tree's own class names -- IfExp, Subscript, ListComp -- are
+# Python's vocabulary, not a circuit-solver user's, and the message a person
+# reads should describe what they wrote. Anything not listed falls back to a
+# phrase that names nothing rather than naming the wrong thing.
+_PLAIN_NAMES = {
+    "IfExp": "a conditional expression",
+    "Compare": "a comparison",
+    "BoolOp": "a boolean operator",
+    "Lambda": "a lambda",
+    "Attribute": "attribute access with a dot",
+    "Subscript": "square-bracket indexing",
+    "List": "a list",
+    "Dict": "a dictionary",
+    "Set": "a set",
+    "ListComp": "a comprehension",
+    "SetComp": "a comprehension",
+    "DictComp": "a comprehension",
+    "GeneratorExp": "a comprehension",
+    "Starred": "a starred argument",
+    "Slice": "a slice",
+    "JoinedStr": "a formatted string",
+    "NamedExpr": "an assignment",
+    "Await": "an await",
+    "Yield": "a yield",
+}
+
+
+def check_expression_syntax(text: str) -> None:
+    """Refuse `text` unless it is plain arithmetic: numbers, names, the
+    operators + - * / ** %, parentheses, and calls of named functions.
+
+    sympify() hands the string to Python's eval, and the restricted
+    namespace in `_allowed_namespace` only governs *names* -- Python
+    syntax such as conditionals, comprehensions, lambdas, attribute
+    access, subscripts and strings would still execute. Checking the
+    syntax tree first makes the namespace trick unnecessary as a
+    security boundary; it is what lets the web app accept circuit
+    strings from strangers. Raises UnsafeExpressionError."""
+    try:
+        tree = ast.parse(text.strip(), mode="eval")
+    except SyntaxError as exc:
+        raise UnsafeExpressionError(
+            f"Could not read the value '{text.strip()}': {exc.msg}.") from None
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Expression, ast.Load)):
+            continue
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float, complex)) \
+                    and not isinstance(node.value, bool):
+                continue
+            bad = repr(node.value)
+        elif isinstance(node, ast.Name):
+            if node.id.startswith("__"):
+                bad = node.id
+            else:
+                continue
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, _SAFE_BINOPS):
+            continue
+        elif isinstance(node, ast.UnaryOp) and isinstance(node.op, _SAFE_UNARY):
+            continue
+        elif isinstance(node, (ast.Tuple, *_SAFE_BINOPS, *_SAFE_UNARY)):
+            continue
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and not node.keywords:
+                continue
+            bad = "a call that is not a plain function name"
+        else:
+            bad = _PLAIN_NAMES.get(type(node).__name__, "something")
+        raise UnsafeExpressionError(
+            f"The value '{text.strip()}' contains {bad}, which is not arithmetic. "
+            "Values may use numbers, symbols, + - * / ** and function calls "
+            "such as sqrt(2) or exp(-3)."
+        )
+
+
 def safe_sympify(text: str, reserve_imaginary: bool = True):
     """sympify() restricted to the namespace above: every identifier that
     isn't an intended constant or function becomes a plain Symbol.
@@ -243,6 +327,7 @@ def safe_sympify(text: str, reserve_imaginary: bool = True):
     analysis where complex values don't apply (dc, fd, tr)."""
     import sympy as sp
 
+    check_expression_syntax(text)
     ns = _allowed_namespace(reserve_imaginary)
     for name in set(_IDENT_RE.findall(text)):
         ns.setdefault(name, sp.Symbol(name))

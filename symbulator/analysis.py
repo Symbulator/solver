@@ -8,12 +8,12 @@ after solving -- ported from the tail of `symbv8s6`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import sympy as sp
 
 from .elements import Element, parse_circuit
-from .engine import solve_circuit
+from .engine import solve_circuit, solve_circuit_all
 
 
 @dataclass
@@ -28,6 +28,20 @@ class Result:
     a phasor in ac, an s-domain expression in fd, a function of t in tr)."""
     domain: str
     values: Dict[str, sp.Expr] = field(default_factory=dict)
+    # Every solution the solver found, `values` being the first. Only an
+    # expert-mode equation that is quadratic in an unknown (a power, say)
+    # yields more than one; pin the root you mean with a condition such
+    # as conditions=["e > 0"], or read the others from here.
+    solutions: List[Dict[str, sp.Expr]] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.solutions:
+            self.solutions = [self.values]
+
+    @property
+    def multiple(self) -> bool:
+        """True when the circuit had more than one solution."""
+        return len(self.solutions) > 1
 
     def __getitem__(self, key: str) -> sp.Expr:
         """result["v_2"] -- direct lookup by variable name; raises KeyError
@@ -50,11 +64,38 @@ class Result:
         for result[f"i_{name}"])."""
         return self.values[f"i_{name}"]
 
+    def at(self, key: Optional[str] = None, **where):
+        """Substitute by *name* -- `res.at(t=0.001)`, `res.at("v_2", t=0.001)`,
+        `res.at(omega=1000)` -- so callers need not reproduce the exact
+        SymPy symbol (with its assumptions) the solver used. With `key`,
+        returns that one expression evaluated; without, a new Result with
+        every expression evaluated.
+
+        This is the safe route for the time symbol: `tr()` writes its
+        answers in Symbol("t", positive=True), and a bare Symbol("t") is a
+        different symbol that `.subs()` would silently ignore."""
+        def sub(expr):
+            if not isinstance(expr, sp.Basic):
+                return expr
+            m = {sym: val for sym in expr.free_symbols
+                 for name, val in where.items() if sym.name == name}
+            return expr.subs(m) if m else expr
+
+        if key is not None:
+            return sub(self.values[key])
+        return Result(domain=self.domain,
+                      values={k: sub(v) for k, v in self.values.items()},
+                      solutions=[{k: sub(v) for k, v in sol.items()}
+                                 for sol in self.solutions])
+
     def __repr__(self) -> str:
         """One line per solved variable, sorted by name, so a Result
         prints legibly at the REPL or in a notebook instead of dumping an
         unordered dict."""
         lines = [f"Result(domain={self.domain!r})"]
+        if self.multiple:
+            lines[0] += (f"  -- {len(self.solutions)} solutions, showing #1; "
+                         "the others are in .solutions")
         for k in sorted(self.values):
             lines.append(f"  {k} = {self.values[k]}")
         return "\n".join(lines)
@@ -198,14 +239,15 @@ def _run(desc: str, domain: str, omega=None, params=None, use_rms: bool = False,
     Kept as one function so the three public entry points stay tiny and
     can't drift out of sync with each other."""
     elements = parse_circuit(desc)
-    solution = solve_circuit(elements, domain=domain, omega=omega, params=params,
-                             equations=equations, unknowns=unknowns,
-                             conditions=conditions, suffix=suffix)
+    solutions = solve_circuit_all(elements, domain=domain, omega=omega, params=params,
+                                  equations=equations, unknowns=unknowns,
+                                  conditions=conditions, suffix=suffix)
     if domain in ("dc", "ac"):
         # Matches the original: the power/impedance "3rd-level" derived
         # quantities are only computed for dc/ac, not for fd (s-domain).
-        solution.update(_derived(elements, domain, solution, use_rms=use_rms))
-    return Result(domain=domain, values=solution)
+        for solution in solutions:
+            solution.update(_derived(elements, domain, solution, use_rms=use_rms))
+    return Result(domain=domain, values=solutions[0], solutions=solutions)
 
 
 def dc(desc: str, params: Optional[dict] = None, equations=None,

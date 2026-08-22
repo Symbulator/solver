@@ -208,3 +208,25 @@ def test_version_matches_the_installed_distribution_when_there_is_one():
     except PackageNotFoundError:
         pytest.skip("symbulator is not installed in this environment")
     assert installed == symbulator.__version__
+
+
+def test_values_must_be_arithmetic():
+    # sympify() evaluates the value text as Python; the namespace trick
+    # only constrains names. Syntax is now checked first, so nothing that
+    # isn't plain arithmetic reaches eval -- the web app relies on this.
+    import pytest
+    from symbulator import dc, ex, UnsafeExpressionError
+    from symbulator.si_prefix import check_expression_syntax
+    for good in ["5", "-1e-6", "2*x**2 + 1", "sqrt(2)*exp(-3)", "E*R2/(R1+R2)",
+                 "pr(2, 3)", "3*I", "Heaviside(t)"]:
+        check_expression_syntax(good)
+    for bad in ["1 if 1 else 0", "x.real", "(lambda: 7)()", "__builtins__",
+                "f(k=1)", "'5'", "True", "a[0]", "x := 1"]:
+        with pytest.raises(UnsafeExpressionError):
+            check_expression_syntax(bad)
+    with pytest.raises(UnsafeExpressionError):
+        dc("e1,1,0,1 if 1 else 0:r1,1,0,1")
+    with pytest.raises(UnsafeExpressionError):
+        ex("e1,1,0,5:r1,1,0,rx", "dc", equations=["i_r1 = 1 if 1 else 2"],
+           unknowns=["rx"])
+    assert dc("e1,1,0,sqrt(4):r1,1,0,1")["v_1"] == 2

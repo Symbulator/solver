@@ -1,7 +1,8 @@
-# symbulator (Python port)
+# symbulator — Symbulator 9
 
-A Python/SymPy port of **Symbulator 8**, Roberto Perez-Franco's symbolic
-linear-circuit simulator for the TI-Nspire CAS.
+**Symbulator 9** is a port of Symbulator 8 — Roberto Perez-Franco's symbolic
+linear-circuit simulator for the TI-Nspire CAS — to Python and SymPy, with
+minor improvements. This package is its solver core.
 
 All of the original's analysis tools are now ported: DC, AC (phasor),
 s-domain (Laplace), and transient analysis; Thevenin/Norton equivalents;
@@ -12,14 +13,16 @@ simplified relative to the calculator version, and why.
 *AI coding agent?* This README is written to be read start to finish and
 followed directly — the Quick start and Circuit description syntax
 sections below have everything needed to write a correct circuit
-description on the first try. See also [llms.txt](llms.txt) for a short
+description on the first try. See also [llms.txt](https://github.com/Symbulator/solver/blob/main/llms.txt) for a short
 index and the two syntax details that are easiest to get wrong.
 
 ## Install
 
 ```
-pip install -r requirements.txt
+pip install symbulator
 ```
+
+From a checkout of the repository: `pip install -e .`
 
 ## Quick start
 

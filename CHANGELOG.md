@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.4.6 -- 22 Aug 2026
+
+### Added
+- **Every root of a circuit is now returned, not just the first.** An
+  expert-mode equation written on a power is quadratic in its unknown, so a
+  circuit like `e,1,0,e` / `r1,1,0,1'k` with `p_r1 = 0.025` is solved by
+  `e = 5` *and* `e = -5`; both satisfy every constraint given. `solve_circuit`
+  kept whichever SymPy happened to list first, which was the negative one, and
+  presented it as the answer. `solve_circuit_all()` now returns them all, and
+  `Result.solutions` exposes the list (`[values]` when there is only one, so
+  the shape never varies), with `Result.multiple` as the flag and a `repr`
+  banner naming the count. `solve_circuit()` is a thin wrapper returning the
+  first, so `equiv`, `plotting` and `laplace` are unchanged. The ranking is
+  `_rank_solutions`: it judges **design unknowns only** -- symbols not named
+  `v_*` or `i_*`, since a node voltage or a branch current may perfectly well
+  be negative -- putting all-real ahead of complex and all-non-negative ahead
+  of negative, with ties keeping SymPy's order. So the root a person would
+  have chosen leads, and the others remain available rather than discarded.
+- **`symbulator.t` and `symbulator.s` are exported**, and `Result.at()`
+  substitutes by *name*. The solver builds its time variable as
+  `Symbol("t", positive=True)`; a user's own bare `Symbol("t")` is a different
+  symbol, so `.subs()` silently did nothing and returned the expression
+  unchanged. `res.at("v_2", t=0.001)` gives one value, `res.at(t=0.001)` a new
+  Result with everything evaluated, `.solutions` included. Assumptions no
+  longer have to be guessed at.
+
+### Fixed
+- **A floating sub-circuit solved silently.** `e1,1,0,5:r1,2,3,1` has nodes 2
+  and 3 with no path to the reference node, and came back with `v_2 = v_3` and
+  `r_e1 = oo` rather than an error. `_validate_topology` now runs a union-find
+  over element terminals (an op-amp joins all three of its terminals, grounded
+  two-port blocks tie both nodes to 0, `m` is skipped since it names inductors
+  rather than nodes) and names the orphaned nodes.
+- **Contradictory circuits gave a generic error.** Sources in parallel, a 0 Ohm
+  resistor across a source, current sources in series -- all produced "Could
+  not solve the system of equations… try symbolic values only", which is not
+  what is wrong. `_diagnose_unsolvable` now names a voltage loop and lists its
+  members, or names a node fed only by current sources. It runs only when
+  `sp.solve` returns nothing, so the ordinary path is untouched.
+
+### Security
+- **Values and equations are checked before `sympify` sees them.** `sympify`
+  is `eval` underneath, and a restricted namespace constrains only *names* --
+  conditional expressions, lambdas, attribute access and subscripting all still
+  ran. This matters for the web app, which feeds it strangers' input.
+  `check_expression_syntax` parses with `ast` first and admits only numeric
+  constants, plain names, arithmetic, unary sign, tuples, and calls of a bare
+  function name with no keyword arguments; anything else raises
+  `UnsafeExpressionError`. It is called inside `safe_sympify`, so values,
+  `equations=` and `conditions=` are all covered.
+
+### Documentation
+- README no longer tells PyPI users to `pip install -r requirements.txt`, a
+  file the distribution does not contain, and no longer links `llms.txt`
+  relatively -- the link only resolved inside a checkout. Project URLs now
+  include the source repository and the documentation site instead of pointing
+  `Homepage` at PyPI itself. The package is described as Symbulator 9, matching
+  symbulator.com.
+
 ## 0.4.5 — 21 Aug 2026
 
 ### Fixed

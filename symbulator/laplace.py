@@ -19,6 +19,12 @@ from .analysis import Result, fd
 
 T = sp.Symbol("t", positive=True)
 S = sp.Symbol("s")
+#: Public names for the same two symbols. `t` carries positive=True so
+#: that inverse Laplace transforms simplify (no stray Heaviside(t)); a
+#: bare sp.Symbol("t") is a *different* symbol and subs() on it silently
+#: does nothing. Import these instead of re-creating them.
+t = T
+s = S
 
 
 def t2s(expr_t, t: sp.Symbol = T, s: sp.Symbol = S) -> sp.Expr:

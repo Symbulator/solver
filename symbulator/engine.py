@@ -552,14 +552,144 @@ def _derived_definition(circuit: "Circuit", name: str, domain: str):
     return None
 
 
+def _diagnose_unsolvable(circuit: "Circuit") -> Optional[str]:
+    """Name the two classic contradictions that leave a linear circuit
+    with no solution, so the user gets "e1 and e2 are in parallel" rather
+    than a generic "could not solve".
+
+    1. A loop of voltage-defining elements -- voltage sources, shorts,
+       zero-valued resistors, and (in dc) inductors -- whose voltages
+       cannot all hold at once, e.g. two sources across the same nodes or
+       a 0 ohm resistor across a source.
+    2. A node fed only by current-defining elements -- current sources
+       and (in dc) capacitors -- so KCL at that node has no free current
+       to balance with.
+
+    Returns a message, or None when neither pattern is present (then the
+    caller's generic message stands)."""
+    dc = circuit.domain == "dc"
+
+    def is_zero(raw: str) -> bool:
+        try:
+            return bool(sp.simplify(circuit._value(raw)) == 0)
+        except Exception:
+            return False
+
+    voltage_edges: List[Tuple[str, str, str]] = []
+    current_only: Dict[str, List[str]] = {}   # node -> [element names]
+    other_at: Dict[str, int] = {}
+    for e in circuit.elements:
+        if e.kind == "m":
+            continue
+        n1, n2 = e.fields[0], e.fields[1]
+        if e.kind == "e" or e.kind == "s" \
+                or (e.kind == "r" and is_zero(e.fields[2])) \
+                or (dc and e.kind == "l"):
+            voltage_edges.append((e.name, n1, n2))
+        if e.kind == "j" or (dc and e.kind == "c"):
+            for n in (n1, n2):
+                current_only.setdefault(n, []).append(e.name)
+        else:
+            nodes = e.fields[:3] if e.kind == "o" else (n1, n2)
+            for n in nodes:
+                other_at[n] = other_at.get(n, 0) + 1
+
+    # 1. voltage loop: union-find; an edge whose ends are already joined
+    #    closes a loop, and the path between them names its members.
+    parent: Dict[str, str] = {}
+    adj: Dict[str, List[Tuple[str, str]]] = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for name, a, b in voltage_edges:
+        if find(a) == find(b):
+            # BFS a -> b through the edges added so far
+            prev = {a: None}
+            queue = [a]
+            while queue and b not in prev:
+                x = queue.pop(0)
+                for y, via in adj.get(x, ()):
+                    if y not in prev:
+                        prev[y] = (x, via)
+                        queue.append(y)
+            loop = [name]
+            x = b
+            while prev.get(x):
+                x, via = prev[x]
+                loop.append(via)
+            members = ", ".join(sorted(loop))
+            return (
+                f"Elements {members} form a loop that fixes the same voltage "
+                "more than once (voltage sources, shorts, zero-ohm resistors"
+                + (" and inductors, which are shorts in dc" if dc else "")
+                + "). Their values contradict each other, so no solution exists."
+            )
+        parent[find(a)] = find(b)
+        adj.setdefault(a, []).append((b, name))
+        adj.setdefault(b, []).append((a, name))
+
+    # 2. current-only node
+    for node, names in current_only.items():
+        if node != "0" and other_at.get(node, 0) == 0:
+            members = ", ".join(sorted(names))
+            return (
+                f"Node {node} connects only to {members}, which fix the "
+                "current into it (current sources"
+                + (" and capacitors, which are open in dc" if dc else "")
+                + "). Those currents cannot sum to zero, so no solution exists."
+            )
+    return None
+
+
 def solve_circuit(elements: List[Element], domain: str, omega=None,
-                   params: Optional[Dict[str, Dict[str, object]]] = None,
-                   equations=None, unknowns=None, conditions=None,
-                   suffix: str = "ask") -> Dict[str, sp.Expr]:
-    """Build and solve the KCL system for `elements`. Returns a dict of
-    {symbol name: solved sympy expression} for every node voltage and
-    element/branch current, mirroring what Symbulator stores in
-    calculator variables `v<node>` / `i<name>` after a simulation.
+                  params: Optional[Dict[str, Dict[str, object]]] = None,
+                  equations=None, unknowns=None, conditions=None,
+                  suffix: str = "ask") -> Dict[str, sp.Expr]:
+    """The preferred solution of `solve_circuit_all` (see there). Kept as
+    the name every caller already uses; only circuits whose expert-mode
+    equations are quadratic in an unknown ever have more than one."""
+    return solve_circuit_all(elements, domain, omega=omega, params=params,
+                             equations=equations, unknowns=unknowns,
+                             conditions=conditions, suffix=suffix)[0]
+
+
+def _rank_solutions(solutions: List[Dict[sp.Symbol, sp.Expr]]) -> List[Dict[sp.Symbol, sp.Expr]]:
+    """Order several solutions so the physically likely one comes first.
+    Node voltages and currents may legitimately be negative, so only the
+    *other* unknowns -- element values and source magnitudes introduced
+    by expert mode, like `rx` or `e` -- are judged: solutions where they
+    are all real rank above ones with complex values, and all
+    non-negative above any negative. Ties keep SymPy's order, so a
+    single solution is untouched."""
+    def is_design(sym) -> bool:
+        n = str(sym)
+        return not (n.startswith("v_") or n.startswith("i_"))
+
+    def key(sol):
+        vals = [v for k, v in sol.items() if is_design(k)]
+        complex_ = sum(1 for v in vals if v.is_real is False)
+        negative = sum(1 for v in vals if v.is_real and v.is_negative)
+        return (complex_, negative)
+
+    return sorted(solutions, key=key)
+
+
+def solve_circuit_all(elements: List[Element], domain: str, omega=None,
+                      params: Optional[Dict[str, Dict[str, object]]] = None,
+                      equations=None, unknowns=None, conditions=None,
+                      suffix: str = "ask") -> List[Dict[str, sp.Expr]]:
+    """Build and solve the KCL system for `elements`. Returns a list of
+    dicts {symbol name: solved sympy expression}, one per solution, for
+    every node voltage and element/branch current, mirroring what
+    Symbulator stores in calculator variables `v<node>` / `i<name>` after
+    a simulation. A plain circuit is linear and has exactly one; an
+    expert-mode equation on a power (quadratic in the unknowns) can have
+    two, and both are returned, ranked by `_rank_solutions`.
 
     Expert mode (ports the `ex()` "Add equations / Add unknowns / Add
     conditions" prompts):
@@ -676,7 +806,7 @@ def solve_circuit(elements: List[Element], domain: str, omega=None,
         circuit.unknowns = [u for u in circuit.unknowns if u not in subs_map]
 
     if not circuit.unknowns:
-        result = dict(circuit.known)
+        return [{k: sp.simplify(v) for k, v in circuit.known.items()}]
     else:
         unknowns = list(dict.fromkeys(circuit.unknowns))  # de-dup, preserve order
         solutions = sp.solve(circuit.equations, unknowns, dict=True)
@@ -686,23 +816,33 @@ def solve_circuit(elements: List[Element], domain: str, omega=None,
                 hint = (" If your extra equation constrains a symbolic "
                         "component value, list that symbol under unknowns "
                         "so the solver may vary it.")
+            why = _diagnose_unsolvable(circuit)
+            if why:
+                raise CircuitError(why)
             raise CircuitError(
                 "Could not solve the system of equations. If you used exact "
                 "numeric values, try again using symbolic values only." + hint
             )
-        sol = solutions[0]
-        result = {str(k): sp.simplify(v) for k, v in sol.items()}
-        # "Third-level" quantities in `circuit.known` (a capacitor's
-        # current, an op-amp's output current, and the like) are stamped
-        # in terms of the node-voltage symbols `Circuit.v()` hands out
-        # *before* the system is solved -- so without this substitution
-        # they'd carry raw unknowns like v_3 straight into the answer,
-        # even though v_3 itself was solved to a number two lines above.
-        # On the original calculator these were evaluated on the fly as
-        # soon as they were asked for; here they only get one evaluation
-        # pass (this one), so it has to be the pass that plugs in the
-        # final solved values, not the raw stamp-time expression.
-        result.update({k: sp.simplify(v.subs(sol)) for k, v in circuit.known.items()})
+        results = []
+        for sol in _rank_solutions(solutions):
+            results.append(_expand_solution(circuit, sol))
+        return results
+
+
+def _expand_solution(circuit: "Circuit", sol: Dict[sp.Symbol, sp.Expr]) -> Dict[str, sp.Expr]:
+    """Turn one raw SymPy solution into the full {name: value} dict."""
+    result = {str(k): sp.simplify(v) for k, v in sol.items()}
+    # "Third-level" quantities in `circuit.known` (a capacitor's
+    # current, an op-amp's output current, and the like) are stamped
+    # in terms of the node-voltage symbols `Circuit.v()` hands out
+    # *before* the system is solved -- so without this substitution
+    # they'd carry raw unknowns like v_3 straight into the answer,
+    # even though v_3 itself was solved to a number two lines above.
+    # On the original calculator these were evaluated on the fly as
+    # soon as they were asked for; here they only get one evaluation
+    # pass (this one), so it has to be the pass that plugs in the
+    # final solved values, not the raw stamp-time expression.
+    result.update({k: sp.simplify(v.subs(sol)) for k, v in circuit.known.items()})
 
     # Make sure every element and every node shows up in the result, even
     # elements whose current was solved as part of the system already.

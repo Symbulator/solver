@@ -279,3 +279,34 @@ def test_zero_volt_zero_current_source_omits_resistance():
     # rather than reporting a bogus number.
     res = dc("e1,1,0,0:r1,1,2,1'k:c1,2,0,1e-6")
     assert "r_e1" not in res.values
+
+
+def test_floating_subcircuit_is_refused():
+    # A part with no path to node 0 has undefined voltages; before this
+    # check the solver returned it silently parametrized (v_2 = v_3).
+    import pytest
+    from symbulator import dc
+    from symbulator.elements import CircuitError
+    with pytest.raises(CircuitError, match="floating"):
+        dc("e1,1,0,5:r1,2,3,1")
+    # An op-amp and a grounded two-port block both count as connections.
+    assert dc("e1,1,0,5:r1,1,2,1:o1,2,3,4:r2,4,0,1")["v_1"] == 5
+    assert dc("e1,1,0,5:r1,1,2,1:z1,2,3")["v_1"] == 5
+
+
+def test_unsolvable_circuits_name_the_contradiction():
+    # Before: a generic "Could not solve... try symbolic values", which
+    # cannot help when the circuit itself is contradictory.
+    import pytest
+    from symbulator import dc, ac
+    from symbulator.elements import CircuitError
+    with pytest.raises(CircuitError, match="e1, e2 form a loop"):
+        dc("e1,1,0,5:e2,1,0,3")              # sources in parallel
+    with pytest.raises(CircuitError, match="e1, r1 form a loop"):
+        dc("e1,1,0,5:r1,1,0,0")              # 0 ohm across a source
+    with pytest.raises(CircuitError, match="e2, l1 form a loop"):
+        dc("e1,1,0,5:r1,1,2,1:l1,2,0,1e-3:e2,2,0,2")   # inductor is a dc short
+    with pytest.raises(CircuitError, match="Node 1 connects only to j1, j2"):
+        dc("j1,0,1,2:j2,1,0,3")              # current sources in series
+    # The same inductor loop is perfectly fine in ac.
+    assert abs(ac("e1,1,0,5:r1,1,2,1:l1,2,0,1e-3:e2,2,0,2", omega=1000)["v_2"] - 2) < 1e-12

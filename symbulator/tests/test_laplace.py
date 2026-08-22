@@ -63,3 +63,19 @@ def test_fd_zero_valued_capacitor_still_open():
     # Regression: the dc/ac capacitor-open fix should carry over to fd.
     res = fd("e1,1,0,9/s:r1,1,2,1000:c1,2,0,0")
     assert sp.simplify(res.i("c1")) == 0
+
+
+def test_time_symbol_is_exported_and_result_at_substitutes_by_name():
+    # tr() answers use Symbol("t", positive=True); a bare Symbol("t") is a
+    # different symbol, so subs() on it silently did nothing. Now the
+    # solver's own symbol is exported, and Result.at() matches by name.
+    import sympy as sp
+    import symbulator as sb
+    res = sb.tr("e1,1,0,5/s:r1,1,2,1000:c1,2,0,1e-6", variables=["v_2"])
+    want = 5 * (1 - sp.exp(-1))
+    assert abs(res["v_2"].subs(sb.t, 0.001) - want) < 1e-9
+    assert abs(res.at("v_2", t=0.001) - want) < 1e-9
+    assert abs(res.at(t=0.001)["v_2"] - want) < 1e-9
+    assert sb.t.is_positive and sb.s == sp.Symbol("s")
+    # The trap itself is unchanged (SymPy semantics), documented, not hidden.
+    assert res["v_2"].subs(sp.Symbol("t"), 0.001) == res["v_2"]

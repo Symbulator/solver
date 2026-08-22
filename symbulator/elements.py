@@ -283,6 +283,7 @@ def _validate_topology(elements: List[Element], two_port_nodes: Optional[tuple] 
     if two_port_nodes is None:
         if not has_ground:
             raise CircuitError("Circuit must contain a reference node 0.")
+        _check_connected(elements)
     else:
         if n1_target == n2_target:
             raise CircuitError("Both nodes in the input cannot be the same node.")
@@ -290,6 +291,48 @@ def _validate_topology(elements: List[Element], two_port_nodes: Optional[tuple] 
             raise CircuitError(f"Circuit does not contain the node {n1_target} you mentioned.")
         if not node2_seen:
             raise CircuitError(f"Circuit does not contain the node {n2_target} you mentioned.")
+
+
+def _check_connected(elements: List[Element]) -> None:
+    """Every node must have a conduction path to the reference. A part of
+    the circuit with no such path (say `r1,2,3,1` hanging on its own) has
+    no defined voltages, and the solver would otherwise return it quietly
+    parametrized in one of its own node voltages (`v_2 = v_3`) rather
+    than flag the mistake (ports `symbv8s3`'s "floating node" check).
+
+    Connectivity is by terminals: r/l/c/e/j/s/t join their two nodes, an
+    op-amp joins all three of its terminals (its nullor constraints tie
+    them together), and a grounded two-port block ties both nodes to 0.
+    Mutual inductances name inductors, not nodes, so they add nothing."""
+    parent = {"0": "0"}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    for el in elements:
+        if el.kind == "m":
+            continue
+        nodes = [el.fields[i] for i in _IDENTIFIER_FIELD_IDX[el.kind]]
+        if el.kind in GROUNDED_ELEMENT_KINDS:
+            nodes.append("0")
+        for n in nodes[1:]:
+            union(nodes[0], n)
+
+    root = find("0")
+    floating = sorted(n for n in parent if find(n) != root)
+    if floating:
+        raise CircuitError(
+            "Node(s) " + ", ".join(floating)
+            + " have no path to the reference node 0; that part of the "
+            "circuit is floating and its voltages are undefined."
+        )
 
 
 # Which field indices (0-based, after the element name) hold *values*

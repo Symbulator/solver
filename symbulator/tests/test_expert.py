@@ -162,3 +162,23 @@ def test_redundant_equation_on_a_known_current_is_harmless():
 def test_contradictory_equation_on_a_known_current_is_reported():
     with pytest.raises(CircuitError):
         dc("j1,0,1,5:r1,1,0,1'k", equations=["i_j1 = 7"])
+
+
+def test_quadratic_equation_keeps_both_roots_and_prefers_positive():
+    # A power is quadratic in the source, so p_r1 = 25 mW admits e = +5
+    # and e = -5. The solver used to keep whichever root SymPy listed
+    # first (-5); now every root is kept and the non-negative one leads.
+    res = ex("e,1,0,e:r1,1,0,1'k", "dc",
+             equations=["p_r1 = 0.025"], unknowns=["e"])
+    assert res.multiple
+    assert [float(s["e"]) for s in res.solutions] == [5.0, -5.0]
+    assert float(res["e"]) == 5.0
+    assert "2 solutions" in repr(res)
+
+
+def test_single_solution_is_not_flagged_multiple():
+    from symbulator import dc
+    res = dc("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k")
+    assert not res.multiple
+    assert res.solutions == [res.values]
+    assert "solutions" not in repr(res)
