@@ -39,11 +39,13 @@ from .equiv import th, er, port
 from .laplace import tr, t2s, s2t, t, s
 from .dispatch import ex
 from .plotting import time_samples, bode_samples, PlotError
+from .schematic import to_svg, draw
 
 #: The single source of truth for the version: pyproject.toml reads this
 #: attribute at build time, so the two cannot disagree.
-__version__ = "0.4.6"
+__version__ = "0.5.0"
 
 __all__ = ["dc", "ac", "fd", "tr", "t2s", "s2t", "t", "s", "pr", "pf", "gain", "th", "er", "port", "ex",
            "time_samples", "bode_samples", "PlotError",
+           "to_svg", "draw",
            "AmbiguousValueError", "UnsafeExpressionError", "find_ambiguous_values", "__version__"]

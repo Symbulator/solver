@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.5.0 -- 23 Aug 2026
+
+### Added
+- **`to_svg()` and `draw()`: a circuit description can now be drawn, not
+  only solved.** `symbulator.schematic` renders the same string `dc()`,
+  `ac()`, `fd()` and `tr()` already take into a standalone SVG, using only
+  the standard library -- no matplotlib, no LaTeX, no external toolchain --
+  so it runs unchanged in CPython and under Pyodide in the browser builds.
+  Every stroke is `currentColor`, so one drawing serves a light and a dark
+  page without being redrawn.
+
+  The layout is deliberately not a general graph-drawing algorithm.
+  Force-directed placement, which most netlist viewers reach for, produces
+  a physics-plausible blob rather than something that reads as a schematic.
+  This assumes instead the shape nearly every linear teaching circuit
+  already has: ground as one rail along the bottom, anything touching it
+  hanging vertically from it, anything between two live nodes running
+  along a top row, and node order taken from a depth-first walk so a chain
+  comes out as a chain. Anything that would collide -- a parallel element,
+  or one reaching over an intermediate node -- is lifted onto its own row
+  with risers, which is interval-graph colouring over the span each
+  element occupies. Op-amps use the same colouring, with the colours
+  becoming lanes down the middle band.
+
+  Two details are taken from the engine rather than chosen, and must not
+  be "corrected" without reading it: a voltage source's **+** goes on `n1`,
+  because `_stamp_e` stamps `v(n1) - v(n2) = value`; and a coupled
+  inductor's dot goes on `n1` of **every** coupled inductor, always,
+  because the coupling enters as `+M*i_other` with no orientation term --
+  reversed coupling is expressed as a *negative* M, so the dots never
+  move and the sign appears in the caption instead. Mutual inductance is
+  captioned rather than drawn, since `m` couples two elements rather than
+  two nodes and a dashed tie between coils just reads as another wire.
+
+  `to_svg` parses with `expand_si=False`, so a bare `1k` draws where the
+  solver would stop and ask which it meant. A circuit can therefore be
+  drawn before, or without, being solved -- which is when a picture helps
+  most.
+
+  Known limits, documented in the module: a bridge draws as a ladder with
+  a jumper rather than the textbook diamond; an inductor coupled to two
+  others with opposite signs cannot be drawn faithfully, the dot
+  convention having no notation for it; a non-grounded op-amp `+` input is
+  routed but may cross wires; and two-port blocks and the transformer draw
+  as labelled boxes without their port parameters.
+
 ## 0.4.6 -- 22 Aug 2026
 
 ### Added
