@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.7 -- 25 Aug 2026
+
+### Fixed
+- **Mutual inductance between impedances given in jOhms.** A textbook
+  writes a coupled pair one of two ways: two inductors in henries, or two
+  impedances already in jOhms. The port stamped only the first. The second
+  -- `r` elements with imaginary values, coupled by an `m` whose value is
+  imaginary too -- was accepted, solved, and answered with **no current at
+  all in the secondary**. No error, no warning, just a zero where the
+  answer should be.
+
+  `symbv8s8` couples `r` elements when the analysis is AC, adding the
+  mutual term without a jw factor because a value in jOhms is already an
+  impedance:
+
+      v(n1) - v(n2) = Z*i_self + sum(M * i_other)
+
+  Restored exactly. Checked against the two worked examples in the
+  Symbulator 7 and 8 documentation, whose answers Roberto derived by hand:
+  AS7's Example 13.1 gives 13.02 at -49.4 degrees and 2.910 at 14.04, and
+  its Practice Problem 13.1 gives 20.00 at -134.43. All three match.
+
 ## 0.5.6 -- 25 Aug 2026
 
 ### Added

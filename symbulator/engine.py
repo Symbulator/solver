@@ -196,7 +196,26 @@ class Circuit:
             return
         i = self.i_symbol(e.name)
         self.unknowns.append(i)
-        self.equations.append(sp.Eq(self.v(e.n1) - self.v(e.n2), R * i))
+
+        # A textbook gives a coupled pair one of two ways: two inductors in
+        # henries, or two impedances already in jOhms. The second is written
+        # here as `r` elements with imaginary values, coupled by an `m` whose
+        # value is imaginary too -- and it has to be stamped, or the coupling
+        # is silently ignored and the secondary carries no current at all.
+        #
+        # symbv8s8 does this only when the tool is ac, and adds the mutual
+        # term without a jw factor, because a value in jOhms is already an
+        # impedance:  v(n1) - v(n2) = Z*i_self + sum(M * i_other)
+        coupling = sp.Integer(0)
+        if self.domain == "ac":
+            for other_name, m_val in self.mutual_of.get(e.name, []):
+                coupling += m_val * self.i_symbol(other_name)
+                other_sym = self.i_symbol(other_name)
+                if other_sym not in self.unknowns:
+                    self.unknowns.append(other_sym)
+
+        self.equations.append(
+            sp.Eq(self.v(e.n1) - self.v(e.n2), R * i + coupling))
         self.add_current(e.n1, i)
         self.add_current(e.n2, -i)
 
