@@ -23,7 +23,7 @@ DELTA = "δ"
 # --------------------------------------------------------------- the rule ---
 
 def test_u_before_a_bracket_is_the_step():
-    assert expand_shorthand("V*u(t)", si=False) == "V*Heaviside(t)"
+    assert expand_shorthand("V*u(t)", si=True) == "V*Heaviside(t)"
 
 
 def test_u_without_a_bracket_is_left_for_the_micro_suffix():
@@ -43,21 +43,21 @@ def test_a_leading_number_gets_its_implied_multiplication():
     # `7u(t)` is a product on the calculator. Nothing later in the chain
     # infers one, and `7Heaviside(t)` is a syntax error rather than a
     # product, so the `*` has to be put in here.
-    assert expand_shorthand("7u(t)", si=False) == "7*Heaviside(t)"
-    assert expand_shorthand("7*u(t)", si=False) == "7*Heaviside(t)"
+    assert expand_shorthand("7u(t)", si=True) == "7*Heaviside(t)"
+    assert expand_shorthand("7*u(t)", si=True) == "7*Heaviside(t)"
 
 
 def test_greek_delta_is_the_impulse():
-    assert expand_shorthand(f"i*{DELTA}(t)", si=False) == "i*DiracDelta(t)"
+    assert expand_shorthand(f"i*{DELTA}(t)", si=True) == "i*DiracDelta(t)"
 
 
 def test_ascii_delta_works_for_keyboards_without_the_character():
-    assert expand_shorthand("i*delta(t)", si=False) == "i*DiracDelta(t)"
+    assert expand_shorthand("i*delta(t)", si=True) == "i*DiracDelta(t)"
 
 
 def test_a_name_ending_in_u_is_not_a_step():
     # `vu(t)` is not the step function; only a `u` that starts a name is.
-    assert expand_shorthand("vu(t)", si=False) == "vu(t)"
+    assert expand_shorthand("vu(t)", si=True) == "vu(t)"
 
 
 # ------------------------------------------------------- reaching sympify ---
@@ -102,3 +102,28 @@ def test_micro_suffix_still_solves_beside_a_step():
     # the rule: a micro capacitor driven by a step source.
     res = tr("e1,1,0,12*u(t):r,1,2,2:c,2,0,1'u,0")
     assert res.v(2) != 0
+
+
+# ------------------------------------------- kept, not replaced -------------
+
+def test_the_typed_notation_survives_being_echoed_back():
+    """Parsed but kept, like `'k` -- not replaced, like `J` in AC.
+
+    The web app puts the echoed circuit straight back into the Circuit
+    Description box. Rewriting `u(t)` to `Heaviside(t)` there would take
+    the calculator's notation away from someone who deliberately typed it,
+    silently, on their first Run.
+    """
+    for typed in ("V*u(t)", f"i*{DELTA}(t)", "2ir3", "2e^(-4t)"):
+        assert expand_shorthand(typed, si=False) == typed
+
+
+def test_but_it_is_expanded_on_the_way_to_being_solved():
+    assert expand_shorthand("V*u(t)", si=True) == "V*Heaviside(t)"
+    assert expand_shorthand("2ir3", si=True) == "2*ir3"
+
+
+def test_the_bracket_shortcut_is_still_expanded_either_way():
+    # Unlike the rest, `[...]` has to go unconditionally: _split_fields
+    # cannot tell the shortcut's inner commas from an element's own.
+    assert expand_shorthand("[1,2]", si=False) == "pr(1,2)"

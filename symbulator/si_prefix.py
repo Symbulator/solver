@@ -259,10 +259,19 @@ def expand_shorthand(text: str, si: bool = True) -> str:
     if "[" in result:
         result = result.replace("[", "pr(").replace("]", ")")
 
-    result = _expand_step_and_impulse(result)
-    if "^" in result:
-        result = _expand_caret(result)
-    result = _insert_implicit_multiplication(result)
+    # Only when the value is on its way to being solved. `si=False` means
+    # the caller wants the circuit echoed back the way it was typed -- the
+    # web app puts that straight back into the Circuit Description box --
+    # and rewriting `u(t)` to `Heaviside(t)` there would take the
+    # calculator's notation away from someone who deliberately used it,
+    # silently, on the first Run. The `[...]` rewrite above is different:
+    # it has to happen unconditionally, because _split_fields cannot tell
+    # the shortcut's inner commas from an element's own without it.
+    if si:
+        result = _expand_step_and_impulse(result)
+        if "^" in result:
+            result = _expand_caret(result)
+        result = _insert_implicit_multiplication(result)
 
     if si and "'" in result:
         for old, new in _SI_PREFIXES:

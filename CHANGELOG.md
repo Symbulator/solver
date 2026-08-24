@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.2 -- 24 Aug 2026
+
+### Fixed
+- **The calculator's notation is kept, not replaced.** 0.5.1 expanded the
+  new shorthands everywhere, including on the path that echoes a circuit
+  back to the caller. The web app puts that echo straight into its Circuit
+  Description box, so typing `V*u(t)` and pressing Run silently rewrote it
+  to `V*Heaviside(t)` -- taking away the notation the user had deliberately
+  chosen, on their first attempt, and leaving their circuit no longer
+  matching the book they copied it from.
+
+  The expansion now happens only on the way to being solved. Echoed back,
+  `u(t)`, the Greek delta, `2ir3` and `2e^(-4t)` all survive exactly as
+  typed. This puts them in the same category as the `'k` prefix, which has
+  always been parsed and kept, rather than with the AC imaginary unit,
+  which is deliberately normalised in view of the user because `J` and `j`
+  meaning the same thing is worth making explicit.
+
+  The `[...]` shortcut still expands unconditionally: `_split_fields`
+  cannot tell its inner commas from an element's own field commas without
+  it.
+
 ## 0.5.1 -- 24 Aug 2026
 
 ### Added
