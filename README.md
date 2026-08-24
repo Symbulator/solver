@@ -45,8 +45,8 @@ eq = th("e1,1,0,12:r1,1,2,4'k:r2,2,0,2'k", "2", "0", domain="dc")
 print(eq.vth, eq.z, eq.pmax)
 
 # Step response of an RC circuit, in the time domain
-res = tr("e1,1,0,5/s:r1,1,2,1000:c1,2,0,1e-6", variables=["v_2"])
-print(res["v_2"])      # 5*(1 - exp(-1000*t))*Heaviside(t)-style result
+res = tr("e1,1,0,5:r1,1,2,1000:c1,2,0,1e-6", variables=["v_2"])
+print(res["v_2"])      # 5 - 5*exp(-1000*t)
 ```
 
 ## Circuit description syntax
@@ -154,22 +154,44 @@ Works the same way in AC (pass `omega=...` and `domain="ac"`).
 
 ## s-domain and transient: `fd()` and `tr()`
 
+**The two read their sources in different domains, and that is the whole
+point of having both.** `tr()` reads a source value as a function of time;
+`fd()` reads it as an expression in `s`. A value of `5` is a 5 V step to
+`tr()` and a 5 V impulse to `fd()` -- different circuits, not different
+notations for the same one.
+
 ```python
 from symbulator import fd, tr, t2s, s2t
 
-# Step response of an RC low-pass, starting from rest
-res_s = fd("e1,1,0,5/s:r1,1,2,1000:c1,2,0,1e-6")   # s-domain answer
-res_t = tr("e1,1,0,5/s:r1,1,2,1000:c1,2,0,1e-6")    # inverse-Laplace'd to time domain
-res_t["v_2"]
+# Step response of an RC low-pass, starting from rest.
+res_t = tr("e1,1,0,5:r1,1,2,1000:c1,2,0,1e-6")      # source in time
+res_s = fd("e1,1,0,5/s:r1,1,2,1000:c1,2,0,1e-6")    # the same source, in s
+res_t["v_2"]        # 5 - 5*exp(-1000*t)
+res_s["v_2"]        # 5000/(s*(s + 1000))
 
 # Natural response of a discharging inductor with an initial condition
 res_t = tr("l1,0,2,0.2,3:r1,2,0,100", variables=["i_l1"])  # I0=3A, L=0.2H, R=100 ohm
 res_t["i_l1"]   # 3*exp(-500*t)
 ```
 
+`tr()` transforms each source for you, by what the value is:
+
+| Source value | Read as |
+|---|---|
+| a function of `t` -- `u(t)`, `t`, `2*exp(-4*t)` | transformed with `t2s()` |
+| a constant -- `12`, `vs` | a step of that amplitude (`value/s`) |
+| already written in `s` -- `5/s` | left alone |
+| a reference to another answer -- `2*i_r1` | left alone; a controlled source is a relation, not a waveform |
+
+In `fd()` nothing is transformed, because `fd()` is the s-domain. To give
+it a value written in time, wrap it in braces -- `{5}`, `{u(t)}`,
+`{2*exp(-4*t)}` -- which is the calculator's shorthand for `t2s(...)` and
+works only there.
+
 `t2s()`/`s2t()` wrap SymPy's `laplace_transform`/`inverse_laplace_transform`
-directly, for preparing a time-domain source value or hand-checking an
-answer.
+directly, for preparing a source value by hand or checking an answer. Both
+are usable inside a circuit description, an `equations=` entry, or any
+expression you hand back to the package.
 
 `tr(desc, variables=[...])` lets you limit which answers get
 inverse-Laplace-transformed -- useful since that step can be slow (or
@@ -178,16 +200,15 @@ fail to find a closed form) for complicated expressions; omit
 Any individual variable that can't be transformed is silently left out
 of the result rather than failing the whole call.
 
-**Simplification vs. the original:** the original auto-detected when a
-source's value was a function of time and Laplace-transformed it for
-you (and called out to a separate `lf\\ilaplace`/`lf\\laplace` calculator
-library for the actual transform, which wasn't included in the document
-this was ported from). This port skips the auto-detection: give `fd()`
-source values already in the s-domain (e.g. `"5/s"` for a 5V step,
-`"1"` for an impulse), using `t2s()` first if you're starting from a
-time-domain expression. `tr()` then uses SymPy's own
-`inverse_laplace_transform` for the reverse step, per your call on how
-to handle the missing library.
+**History, in case you meet an older version:** releases before 0.5.5
+skipped the forward transform. The original called out to a separate
+`lf\\laplace` calculator library that was not in the document this was
+ported from, so `tr()` inverse-transformed its answers but passed its
+sources through untouched -- which made every transient result one
+integration short, an impulse response where a step response was meant.
+SymPy's own `laplace_transform` does the job, and 0.5.5 restored the
+behaviour the calculator versions have always had. A description written
+for Symbulator 7 or 8 now gives the same answer here.
 
 ## Expert mode: `ex()`
 
@@ -249,8 +270,10 @@ numbers is a reliable fallback.
   a voltage and current phasor directly); the original's implicit
   per-element-type sign convention, driven by reading calculator
   variables like `v<name>`/`i<name>` automatically, wasn't replicated.
-- **`fd()`/`tr()`** require s-domain source values up front rather than
-  auto-detecting and transforming time-domain ones (see above).
+- **`fd()`** requires s-domain source values, as the calculator's does;
+  the `{...}` shorthand converts a time-domain one where you write it.
+  `tr()` reads its sources in the time domain, also as the calculator's
+  does. (Before 0.5.5 neither transformed anything -- see above.)
 - **No interactive prompts anywhere** -- everything the calculator asked
   for via `RequestStr` (analysis type, which answers to save, expert-mode
   custom equations, two-port parameter values, etc.) is a plain function
