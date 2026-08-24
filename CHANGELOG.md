@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.3 -- 24 Aug 2026
+
+### Added
+- **`t2s()` and `s2t()` can be reached from a circuit.** Both have existed
+  since the port and are exported, but a value, an Evaluate expression or a
+  Solve equation is parsed against a deliberately small namespace, and
+  neither was in it -- so `t2s(5)` was read as a variable being called and
+  failed with "'Symbol' object is not callable". They are now available
+  wherever an expression is, so a source can be written `t2s(5)` rather
+  than hand-transformed to `5/s`.
+
+- **`t` and `s` resolve to the symbols the solver itself uses.** This is
+  the part that would have bitten quietly: `tr()` writes its answers in
+  `Symbol("t", positive=True)`, and a hand-written `t` used to become a
+  bare `Symbol("t")` -- a different symbol, which `subs()` ignores without
+  complaint and which `t2s()` would integrate over instead of the real
+  time variable.
+
+`pf()` is deliberately not included. It returns a sentence -- "pf: 0.6
+lagging" -- rather than an expression, so sympify hands back a Python str
+and every formatter downstream expects a SymPy object. It belongs in the
+interface as a tool with its own inputs and a text result, not as
+something callable in a value.
+
 ## 0.5.2 -- 24 Aug 2026
 
 ### Fixed

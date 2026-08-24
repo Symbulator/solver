@@ -65,14 +65,18 @@ def test_a_name_ending_in_u_is_not_a_step():
 def test_step_reaches_sympy_as_heaviside():
     # expand_value is the real entry point: it tries the bare suffix first
     # (so `7u` stays micro) and falls through to expand_shorthand.
+    # `t` now resolves to the solver's own Symbol("t", positive=True);
+    # a bare Symbol("t") is a different symbol.
+    from symbulator.laplace import T
     assert safe_sympify(expand_value("V*u(t)")) == (
-        sp.Symbol("V") * sp.Heaviside(sp.Symbol("t")))
+        sp.Symbol("V") * sp.Heaviside(T))
 
 
 def test_impulse_reaches_sympy_as_diracdelta():
     got = safe_sympify(expand_value(f"i*{DELTA}(t)"),
                        reserve_imaginary=False)
-    assert got == sp.Symbol("i") * sp.DiracDelta(sp.Symbol("t"))
+    from symbulator.laplace import T
+    assert got == sp.Symbol("i") * sp.DiracDelta(T)
 
 
 def test_u_is_still_an_ordinary_variable():

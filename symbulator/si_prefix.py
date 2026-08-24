@@ -321,6 +321,10 @@ def _allowed_namespace(reserve_imaginary: bool = True):
     those four names away from someone writing a DC or s-domain
     circuit."""
     import sympy as sp
+    # Imported here rather than at module level: laplace imports
+    # analysis, which imports this module, so a top-level import
+    # would be a cycle. The same reason `pr` has always been local.
+    from .laplace import S, T, s2t, t2s
     from .utils import pr
 
     ns = {
@@ -339,6 +343,19 @@ def _allowed_namespace(reserve_imaginary: bool = True):
         # resolve to the real function here or that call fails with
         # "'Symbol' object is not callable" once it reaches sympify.
         "pr": pr,
+        # The version 7 aids for moving an expression between the
+        # time and complex frequency domains, which had no way in
+        # before. `pf` is deliberately NOT here: it returns a
+        # sentence ("pf: 0.6 lagging"), not an expression, so
+        # sympify hands back a Python str and every formatter
+        # downstream is expecting a SymPy object.
+        "t2s": t2s, "s2t": s2t,
+        # Bound to the symbols the solver itself uses. `t` matters:
+        # tr() writes its answers in Symbol("t", positive=True),
+        # and a bare Symbol("t") is a different symbol that subs()
+        # silently ignores -- so a hand-written `t` has to be the
+        # same one, or t2s(t) integrates over the wrong variable.
+        "t": T, "s": S,
     }
     if reserve_imaginary:
         # i, I, j and J all mean the imaginary unit. Reserving all four
