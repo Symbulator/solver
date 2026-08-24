@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.6 -- 25 Aug 2026
+
+### Added
+- **The `{...}` shorthand for a time-domain source in FD.** FD reads its
+  source values in the s-domain -- `5/s` is a step, `5` is an impulse.
+  Wrapping a value in braces says "this one is written in time", and it is
+  transformed on the way in. `{5}`, `{u(t)}` and `{2*exp(-4*t)}` all work,
+  and `{5}` is exactly `t2s(5)` in five fewer characters.
+
+  Ported from `symbv8si`, which does the same two substitutions and only
+  when the tool is fd -- TR converts its sources anyway, so there would be
+  nothing for it to do there. Asking for it elsewhere now says so instead
+  of letting the braces reach SymPy and come back as "contains a set".
+
+  Not to be confused with `[...]`, which is the parallel-impedance
+  shortcut (`[2,3]` is `pr(2,3)`), applies in every analysis, and has
+  worked since the port. The two are pinned against each other by a test.
+
 ## 0.5.5 -- 25 Aug 2026
 
 ### Fixed

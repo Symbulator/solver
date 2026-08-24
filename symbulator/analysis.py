@@ -272,11 +272,19 @@ def ac(desc: str, omega, params: Optional[dict] = None, use_rms: bool = False,
 
 def fd(desc: str, params: Optional[dict] = None, equations=None,
        unknowns=None, conditions=None, suffix: str = "ask") -> Result:
-    """s-domain (Laplace) analysis -- ports `fd()`. Source values may be
-    any SymPy-parseable expression in `s` (e.g. "5/s" for a DC step,
-    "1" for an impulse); use `utils.t2s()` to Laplace-transform a
-    time-domain source expression first if needed. `l`/`c` elements may
-    carry an optional 5th field for a nonzero initial condition, e.g.
-    "l1,1,2,0.1,2" for a 0.1 H inductor with 2 A of initial current."""
-    return _run(desc, "fd", params=params, equations=equations,
-                unknowns=unknowns, conditions=conditions, suffix=suffix)
+    """s-domain (Laplace) analysis -- ports `fd()`.
+
+    Source values are read **in the s-domain**: "5/s" is a 5 V step, "1"
+    is an impulse. A value written in the time domain instead can be
+    wrapped in braces -- "{5}", "{u(t)}", "{2*exp(-4*t)}" -- and it is
+    transformed on the way in, which is the calculator's `{...}`
+    shorthand for `t2s(...)`.
+
+    `l`/`c` elements may carry an optional 5th field for a nonzero initial
+    condition, e.g. "l1,1,2,0.1,2" for a 0.1 H inductor with 2 A of
+    initial current."""
+    from .si_prefix import expand_time_domain_braces
+
+    return _run(expand_time_domain_braces(desc), "fd", params=params,
+                equations=equations, unknowns=unknowns, conditions=conditions,
+                suffix=suffix)

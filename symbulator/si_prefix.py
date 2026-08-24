@@ -90,6 +90,29 @@ def bare_suffix_match(text: str):
     return m.groups() if m else None
 
 
+# The `{...}` shorthand, from symbv8si:
+#
+#     If betatool="fd" and inString(sitext,"{") Then
+#       symbv8sr("{", "s\t2s(")
+#       symbv8sr("}", ")")
+#
+# FD reads its source values in the s-domain. Wrapping one in braces says
+# "this one is written in time -- convert it", which is exactly `t2s(...)`
+# and five characters shorter. It is deliberately FD-only: TR converts its
+# sources anyway, so there would be nothing for it to do there.
+#
+# A plain textual swap, as the original's is. The braces cannot nest and
+# cannot contain a comma that matters -- a value containing one would
+# already have been split into separate fields long before here.
+
+
+def expand_time_domain_braces(text: str) -> str:
+    """`{expr}` -> `t2s(expr)`, for a source value written in time."""
+    if "{" not in text:
+        return text
+    return text.replace("{", "t2s(").replace("}", ")")
+
+
 def expand_value(text: str, suffix: str = "si") -> str:
     """Expand a single value field. A bare engineering-notation suffix
     ("1k", "4.7u", ...) is inherently ambiguous -- 1k could mean the SI

@@ -234,3 +234,37 @@ def test_a_controlled_source_is_left_alone():
     desc = "e1,1,0,2:r3,1,2,3:r5,2,3,5:c,3,0,1:j,0,2,2*i_r3"
     assert "2*i_r3" in _sources_to_s(desc)
     assert "e1,1,0,2/s" in _sources_to_s(desc)
+
+
+# ----------------------------------------- the {...} shorthand in FD --------
+
+def test_braces_mark_a_time_domain_source_in_fd():
+    """symbv8si: when the tool is fd, `{` becomes `t2s(` and `}` becomes `)`.
+
+    FD reads its sources in the s-domain; the braces say "this one is
+    written in time". `{5}` is therefore a 5 V step and a bare `5` is an
+    impulse -- different circuits, which is the whole reason the shorthand
+    exists.
+    """
+    from symbulator import fd
+    step = fd("e1,1,0,{5}:r1,1,2,2:c,2,0,1,0").values["v_2"]
+    same = fd("e1,1,0,t2s(5):r1,1,2,2:c,2,0,1,0").values["v_2"]
+    impulse = fd("e1,1,0,5:r1,1,2,2:c,2,0,1,0").values["v_2"]
+    assert sp.simplify(step - same) == 0
+    assert sp.simplify(step - impulse) != 0
+
+
+def test_the_brace_shorthand_agrees_with_writing_it_out():
+    from symbulator import fd
+    braces = fd("e1,1,0,{u(t)}:r1,1,2,1:r2,2,o,5:c,2,0,1/3,0:l,o,0,1,0")
+    explicit = fd("e1,1,0,1/s:r1,1,2,1:r2,2,o,5:c,2,0,1/3,0:l,o,0,1,0")
+    assert sp.simplify(braces.values["v_o"] - explicit.values["v_o"]) == 0
+
+
+def test_the_parallel_shortcut_is_a_different_bracket():
+    """`[...]` is pr(...) and applies in every analysis; `{...}` is t2s(...)
+    and applies only in FD. Easy to conflate, so pin both."""
+    from symbulator.si_prefix import expand_shorthand, expand_time_domain_braces
+    assert expand_shorthand("[2,3]", si=False) == "pr(2,3)"
+    assert expand_time_domain_braces("{u(t)}") == "t2s(u(t))"
+    assert expand_time_domain_braces("2*v_1") == "2*v_1"
