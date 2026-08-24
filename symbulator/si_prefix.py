@@ -111,6 +111,135 @@ def expand_value(text: str, suffix: str = "si") -> str:
     return expand_shorthand(text)
 
 
+# The calculator's names for the step and the impulse, so a description
+# written for versions 7 and 8 reads unchanged in version 9.
+#
+# `u` is the hard one, because it is also the micro prefix, and Roberto
+# fixed the rule on 24 Aug 2026: whether a `(` follows decides it.
+#
+#     7'u      micro      the quoted prefix, untouched here
+#     7u       micro      a bare suffix, left for _BARE_SUFFIX_RE
+#     7*u(t)   function   an explicit multiplication
+#     7u(t)    function   the same, with the multiplication implied
+#
+# So only `u(` is rewritten, never a bare `u` -- which also means someone
+# using `u` as a plain variable keeps it, unlike the names in
+# _allowed_namespace, which are taken away everywhere.
+#
+# The implied multiplication in `7u(t)` has to be made explicit here too:
+# nothing later in the chain infers one, and `7Heaviside(t)` is a syntax
+# error rather than a product.
+_STEP_RE = re.compile(r"(?<![A-Za-z0-9_.])(\d+\.?\d*)?\s*"
+                      r"(u|δ|delta)\s*\(")
+_STEP_FN = {"u": "Heaviside", "δ": "DiracDelta", "delta": "DiracDelta"}
+
+
+def _expand_step_and_impulse(text: str) -> str:
+    """`u(t)` -> `Heaviside(t)`, the delta -> `DiracDelta(t)`, inserting the
+    multiplication a leading number implies."""
+    def swap(m):
+        number, name = m.group(1), m.group(2)
+        head = f"{number}*" if number else ""
+        return f"{head}{_STEP_FN[name]}("
+    return _STEP_RE.sub(swap, text)
+
+
+# The calculator's power notation and its implied multiplications.
+#
+# Both are habits every Symbulator 7/8 user has, and both used to fail in
+# version 9 -- `2^3` was rejected outright (a caret is XOR in Python, which
+# the AST guard refuses) and `2ir3` came back "invalid decimal literal".
+# Between them they broke 37 of the 50 circuits in the version 9
+# documentation.
+#
+# Scientific notation is the trap here. `1e-6`, `2.5e3` and `1E6` are
+# ordinary numbers that SymPy already reads, and a naive "digit followed by
+# a letter means multiply" rule turns `2.5e3` into `2.5*e3`, silently
+# replacing a number with a symbol. So the exponent form is matched first
+# and stepped over.
+_SCI_RE = re.compile(r"\d\.?\d*[eE][+-]?\d+")
+
+# The other thing that must survive untouched is a bare engineering suffix:
+# `1k` is a thousand, not one times k, and `4.7u` is micro. Those are read
+# further along (expand_value, find_ambiguous_values), which never gets the
+# chance if a `*` has already been pushed into the middle of them. Letters
+# outside this set -- the `t` in `2t`, the `i` in `2ir3` -- are not suffixes
+# and do get the multiplication.
+_BARE_UNIT_RE = re.compile(r"\d\.?\d*[kKMGTPmuµμnpfa](?![\w])")
+
+# A number meeting a name or an opening bracket, or a bracket meeting
+# either -- never a name meeting a bracket, which is a function call.
+_IMPLICIT_NUM = re.compile(r"(?<=[\d.])(?=[A-Za-z_(])")
+_IMPLICIT_PAREN = re.compile(r"(?<=\))(?=[\w(])")
+
+
+def _insert_implicit_multiplication(text: str) -> str:
+    """`2ir3` -> `2*ir3`, `2(a+b)` -> `2*(a+b)`, `(a)(b)` -> `(a)*(b)`."""
+    # Protect scientific notation, then put it back untouched.
+    kept = []
+
+    def stash(m):
+        kept.append(m.group(0))
+        return f"\x00{len(kept) - 1}\x00"
+
+    guarded = _SCI_RE.sub(stash, text)
+    guarded = _BARE_UNIT_RE.sub(stash, guarded)
+    guarded = _IMPLICIT_NUM.sub("*", guarded)
+    guarded = _IMPLICIT_PAREN.sub("*", guarded)
+    for n, original in enumerate(kept):
+        guarded = guarded.replace(f"\x00{n}\x00", original)
+    return guarded
+
+
+def _expand_caret(text: str) -> str:
+    """`2^3` -> `2**3`, and `e^x` -> `exp(x)`.
+
+    `e` has to become Euler's number rather than a symbol, but only where a
+    caret follows: putting `e` in the namespace would take it away from
+    everyone using it as an ordinary variable, the way `re` and `exp`
+    already are. So the exponent's extent is found here instead -- a
+    bracketed group, or a sign and one number or name -- and wrapped in a
+    real exp() call.
+    """
+    out, i = [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch != "^":
+            out.append(ch)
+            i += 1
+            continue
+
+        # Is this the calculator's e^, rather than some other base?
+        # A digit before the `e` is a coefficient -- `2e^3` is two times
+        # Euler's number cubed. Only a letter or underscore means the `e`
+        # is the tail of a name, as in `re^2`, where it is not Euler's.
+        base_is_e = (out and out[-1] == "e"
+                     and (len(out) < 2 or not (out[-2].isalpha()
+                                               or out[-2] == "_")))
+        j = i + 1
+        if j < len(text) and text[j] == "(":
+            depth, k = 1, j + 1
+            while k < len(text) and depth:
+                depth += (text[k] == "(") - (text[k] == ")")
+                k += 1
+            exponent, j = text[j + 1:k - 1], k
+        else:
+            k = j
+            if k < len(text) and text[k] in "+-":
+                k += 1
+            while k < len(text) and (text[k].isalnum() or text[k] in "_."):
+                k += 1
+            exponent, j = text[j:k], k
+
+        if base_is_e:
+            out.pop()
+            out.append(f"exp({exponent})")
+        else:
+            out.append(f"**({exponent})")
+        i = j
+    return "".join(out)
+
+
 def expand_shorthand(text: str, si: bool = True) -> str:
     """Expand `'k`/`'M`/... unit-prefix shorthand and `[...]` parallel-
     impedance shortcuts in `text`, mirroring symbv8si.
@@ -129,6 +258,11 @@ def expand_shorthand(text: str, si: bool = True) -> str:
 
     if "[" in result:
         result = result.replace("[", "pr(").replace("]", ")")
+
+    result = _expand_step_and_impulse(result)
+    if "^" in result:
+        result = _expand_caret(result)
+    result = _insert_implicit_multiplication(result)
 
     if si and "'" in result:
         for old, new in _SI_PREFIXES:

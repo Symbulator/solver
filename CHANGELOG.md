@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.1 -- 24 Aug 2026
+
+### Added
+- **The calculator's syntax is read as written.** A circuit description
+  copied out of the Symbulator 7 or 8 documentation used to fail in this
+  package, which meant the version 9 documentation had to carry a second
+  spelling of every circuit. Four habits are now understood, and each one
+  was chosen so that nothing is taken away from anyone who was not using
+  it:
+
+  - `u(t)` is the unit step and the Greek delta is the impulse, becoming
+    `Heaviside(t)` and `DiracDelta(t)`. `u` is also the micro prefix, and
+    the two are told apart by whether a `(` follows: `7u` is micro, `7u(t)`
+    is the step. A bare `u` is therefore untouched and still works as an
+    ordinary variable -- unlike the names in the parsing namespace, which
+    are taken from every user. ASCII `delta(t)` is accepted too, for
+    keyboards without the character.
+
+  - `^` is exponentiation. It was not merely unsupported before: `2^3` was
+    rejected outright, because a caret is XOR in Python and the expression
+    guard refuses it. It now reads as 8.
+
+  - `e^x` is Euler's number raised to x, becoming `exp(x)`. Only a caret
+    makes `e` special, so `e` on its own remains an ordinary variable and a
+    source valued `e` still solves.
+
+  - Multiplication may be implied: `2ir3`, `.2v1`, `2(a+b)`, `(a)(b)` and
+    `10e^(-t)sin(2t)` all read as products.
+
+  Two things are deliberately protected from that last rule. Scientific
+  notation stays a number -- without the guard `2.5e3` becomes `2.5*e3`,
+  quietly replacing a value with a symbol -- and so does a bare engineering
+  suffix, since `1k` is a thousand rather than one times k. The difference
+  is whether the letter is an SI prefix: `2m` is milli, `2t` is a product.
+
 ## 0.5.0 -- 23 Aug 2026
 
 ### Added
