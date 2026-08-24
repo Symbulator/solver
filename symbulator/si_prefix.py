@@ -353,12 +353,14 @@ def _allowed_namespace(reserve_imaginary: bool = True):
         # sympify hands back a Python str and every formatter
         # downstream is expecting a SymPy object.
         "t2s": t2s, "s2t": s2t,
-        # Bound to the symbols the solver itself uses. `t` matters:
-        # tr() writes its answers in Symbol("t", positive=True),
-        # and a bare Symbol("t") is a different symbol that subs()
-        # silently ignores -- so a hand-written `t` has to be the
-        # same one, or t2s(t) integrates over the wrong variable.
-        "t": T, "s": S,
+        # `s` is the solver's own symbol. `t` is deliberately NOT:
+        # tr() writes its answers in Symbol("t", positive=True), but
+        # binding that here changes what expressions *mean* rather than
+        # only which symbol they use -- SymPy evaluates DiracDelta of a
+        # strictly positive argument to 0, so `delta(t)` silently became
+        # nothing and an impulse source disappeared from the circuit.
+        # Parse with a neutral t; the transforms below reconcile the two.
+        "t": sp.Symbol("t"), "s": S,
     }
     if reserve_imaginary:
         # i, I, j and J all mean the imaginary unit. Reserving all four

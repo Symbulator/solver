@@ -65,18 +65,16 @@ def test_a_name_ending_in_u_is_not_a_step():
 def test_step_reaches_sympy_as_heaviside():
     # expand_value is the real entry point: it tries the bare suffix first
     # (so `7u` stays micro) and falls through to expand_shorthand.
-    # `t` now resolves to the solver's own Symbol("t", positive=True);
-    # a bare Symbol("t") is a different symbol.
-    from symbulator.laplace import T
+    # `t` parses as a neutral symbol on purpose -- see
+    # test_a_positive_t_would_erase_the_impulse below.
     assert safe_sympify(expand_value("V*u(t)")) == (
-        sp.Symbol("V") * sp.Heaviside(T))
+        sp.Symbol("V") * sp.Heaviside(sp.Symbol("t")))
 
 
 def test_impulse_reaches_sympy_as_diracdelta():
     got = safe_sympify(expand_value(f"i*{DELTA}(t)"),
                        reserve_imaginary=False)
-    from symbulator.laplace import T
-    assert got == sp.Symbol("i") * sp.DiracDelta(T)
+    assert got == sp.Symbol("i") * sp.DiracDelta(sp.Symbol("t"))
 
 
 def test_u_is_still_an_ordinary_variable():
@@ -159,3 +157,80 @@ def test_t2s_reaches_the_solver_through_a_circuit_value():
     from symbulator import tr
     ramp = tr("j,0,1,t2s(t):c,1,0,2,0").values["v_1"]
     assert sp.simplify(ramp - sp.Symbol("t", positive=True) ** 2 / 4) == 0
+
+
+def test_a_positive_t_would_erase_the_impulse():
+    """Why the parsing namespace binds a neutral `t`.
+
+    0.5.3 bound it to the solver's Symbol("t", positive=True) so that a
+    hand-written `t` matched the answers. That changes what an expression
+    *means*: SymPy evaluates DiracDelta of a strictly positive argument to
+    zero, so an impulse source vanished before the transform ever saw it.
+    """
+    assert sp.DiracDelta(sp.Symbol("t", positive=True)) == 0
+    assert sp.DiracDelta(sp.Symbol("t")) != 0
+    # And the parsed form is the one that survives.
+    assert safe_sympify(expand_value("delta(t)")) != 0
+
+
+# ---------------------------------------- TR reads its sources in time ------
+
+def _in_time(expr):
+    """Answers come back in Symbol("t", positive=True); expectations here
+    are written with a neutral t. Same symbol name, different assumptions,
+    and subtracting them does not cancel -- so line them up first."""
+    e = sp.sympify(expr)
+    T = sp.Symbol("t", positive=True)
+    return e.subs({x: T for x in e.free_symbols if x.name == "t"})
+
+
+def _tr_gives(desc, key, expected):
+    from symbulator import tr
+    got = _in_time(tr(desc).values[key])
+    assert sp.simplify(sp.expand(got - _in_time(expected))) == 0
+
+
+def test_a_constant_source_is_a_step():
+    # symbv8s5: a NUM value becomes value/s.
+    _tr_gives("j,0,1,1:c,1,0,2,0", "v_1", sp.Symbol("t") / 2)
+
+
+def test_a_waveform_source_is_transformed():
+    # symbv8s5: a value that changes with t becomes t2s(value).
+    _tr_gives("j,0,1,t:c,1,0,2,0", "v_1", sp.Symbol("t") ** 2 / 4)
+
+
+def test_the_rc_step_response_is_the_step_response():
+    t = sp.Symbol("t")
+    _tr_gives("e1,1,0,12:r,1,2,2:c,2,0,1,0", "v_2", 12 - 12 * sp.exp(-t / 2))
+
+
+def test_the_calculators_spelling_gives_the_calculators_answer():
+    # AS7's Example 16.1, whose answer is in print in both the version 7
+    # and version 8 documentation.
+    t = sp.Symbol("t")
+    _tr_gives("e1,1,0,u(t):r1,1,2,1:r2,2,o,5:c,2,0,1/3,0:l,o,0,1,0", "v_o",
+              3 * sp.sqrt(2) * sp.exp(-4 * t) * sp.sin(sp.sqrt(2) * t) / 2)
+
+
+def test_an_s_domain_source_is_left_alone():
+    # Anything already written in s is the caller having done the
+    # conversion; transforming it again would be wrong. This is also what
+    # keeps every existing version 9 description working.
+    t = sp.Symbol("t")
+    _tr_gives("e1,1,0,5/s:r1,1,2,1000:c1,2,0,1e-6", "v_2",
+              5 - 5 * sp.exp(-1000 * t))
+
+
+def test_a_controlled_source_is_left_alone():
+    """A controlled source's value is a relation, not a waveform.
+
+    symbv8s5 decides this by substituting each node voltage and element
+    current in turn and seeing whether the value changes; this port looks
+    at which symbols the value contains. Either way `2*i_r3` must not be
+    divided by s.
+    """
+    from symbulator.laplace import _sources_to_s
+    desc = "e1,1,0,2:r3,1,2,3:r5,2,3,5:c,3,0,1:j,0,2,2*i_r3"
+    assert "2*i_r3" in _sources_to_s(desc)
+    assert "e1,1,0,2/s" in _sources_to_s(desc)

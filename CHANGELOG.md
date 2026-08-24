@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.5 -- 25 Aug 2026
+
+### Fixed
+- **`tr()` reads its sources in the time domain again.** The original
+  transforms a transient source into the s-domain on the way in and
+  transforms the answers back on the way out. This port only ever did the
+  second half, so every transient result was one integration short: a
+  plain `12` gave the impulse response where the step response was meant,
+  and it looked plausible enough to pass a glance.
+
+  The rule restored here is `symbv8s5`'s, read out of the Symbulator 8
+  document rather than inferred:
+
+      If tool="tr" and the element is a source (e or j):
+        value depends on t          -> t2s(value)
+        value is a constant         -> value/s   (a step of that size)
+        value refers to another
+          element's answer          -> left alone
+
+  That last branch matters: a controlled source's value is a relation, not
+  a waveform, and transforming `2*i_r1` would be meaningless. A value
+  already written in terms of `s` is also left alone, so every existing
+  version 9 description keeps working -- all twelve of the app's bundled
+  examples answer exactly as they did in 0.5.4.
+
+- **`delta(t)` no longer vanishes.** 0.5.3 bound `t` in the parsing
+  namespace to the solver's `Symbol("t", positive=True)`. That changes
+  what an expression *means* rather than only which symbol it uses: SymPy
+  evaluates `DiracDelta` of a strictly positive argument to zero, so an
+  impulse source was gone before the transform ever saw it. `t` parses as
+  a neutral symbol again, and `t2s()` now takes the time symbol from the
+  expression it is given instead of assuming one -- forcing a symbol the
+  expression does not contain made `laplace_transform` treat the whole
+  thing as a constant, which is how `t` came back as `t/s` instead of
+  `1/s**2`.
+
 ## 0.5.4 -- 24 Aug 2026
 
 ### Fixed
