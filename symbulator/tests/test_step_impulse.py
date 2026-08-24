@@ -131,3 +131,31 @@ def test_the_bracket_shortcut_is_still_expanded_either_way():
     # Unlike the rest, `[...]` has to go unconditionally: _split_fields
     # cannot tell the shortcut's inner commas from an element's own.
     assert expand_shorthand("[1,2]", si=False) == "pr(1,2)"
+
+
+# ------------------------------------------- names with digits inside -------
+
+def test_a_digit_inside_a_name_is_not_a_multiplication():
+    """`t2s(t)` must not become `t2*s(t)`.
+
+    The implicit-multiplication rule shipped in 0.5.1 looked only at the
+    character before the letter, so it split every name with a digit in the
+    middle -- including t2s and s2t themselves, the two functions most
+    likely to be typed into a transient source.
+    """
+    for name in ("t2s(t)", "s2t(1/s)", "i2r", "v2", "r2d(x)"):
+        assert expand_value(name) == name
+
+
+def test_the_multiplication_is_still_inserted_where_it_belongs():
+    assert expand_value("2ir3") == "2*ir3"
+    assert expand_value(".2v1") == ".2*v1"
+    assert expand_value("2t") == "2*t"
+
+
+def test_t2s_reaches_the_solver_through_a_circuit_value():
+    # The whole point of putting t2s in the namespace: a transient source
+    # written in the time domain, converted where it is typed.
+    from symbulator import tr
+    ramp = tr("j,0,1,t2s(t):c,1,0,2,0").values["v_1"]
+    assert sp.simplify(ramp - sp.Symbol("t", positive=True) ** 2 / 4) == 0

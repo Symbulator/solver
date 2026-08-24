@@ -169,7 +169,10 @@ _BARE_UNIT_RE = re.compile(r"\d\.?\d*[kKMGTPmuµμnpfa](?![\w])")
 
 # A number meeting a name or an opening bracket, or a bracket meeting
 # either -- never a name meeting a bracket, which is a function call.
-_IMPLICIT_NUM = re.compile(r"(?<=[\d.])(?=[A-Za-z_(])")
+# The number must not be part of a name. Without the lookbehind, `t2s(t)`
+# becomes `t2*s(t)` and the function disappears -- which broke t2s and s2t
+# themselves, the two names most likely to be typed here.
+_IMPLICIT_NUM = re.compile(r"(?<![A-Za-z_])(\.?\d+\.?\d*)(?=[A-Za-z_(])")
 _IMPLICIT_PAREN = re.compile(r"(?<=\))(?=[\w(])")
 
 
@@ -184,7 +187,7 @@ def _insert_implicit_multiplication(text: str) -> str:
 
     guarded = _SCI_RE.sub(stash, text)
     guarded = _BARE_UNIT_RE.sub(stash, guarded)
-    guarded = _IMPLICIT_NUM.sub("*", guarded)
+    guarded = _IMPLICIT_NUM.sub(r"\1*", guarded)
     guarded = _IMPLICIT_PAREN.sub("*", guarded)
     for n, original in enumerate(kept):
         guarded = guarded.replace(f"\x00{n}\x00", original)

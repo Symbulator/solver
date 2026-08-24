@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.4 -- 24 Aug 2026
+
+### Fixed
+- **A digit inside a name is no longer read as a multiplication.** The
+  implicit-multiplication rule added in 0.5.1 looked only at the character
+  before the letter, so any name with a digit in the middle was split:
+  `t2s(t)` became `t2*s(t)`, and the function vanished into a symbol called
+  `t2` times a symbol called `s`. That broke `t2s` and `s2t` -- the two
+  functions 0.5.3 had just made reachable, and the two most likely to be
+  typed into a transient source. `i2r`, `v2` and any other name of that
+  shape were affected the same way.
+
+  A number now has to start where a name could not: `2ir3` and `.2v1` still
+  gain their multiplication, `t2s(t)` and `i2r` are left alone.
+
 ## 0.5.3 -- 24 Aug 2026
 
 ### Added
