@@ -43,6 +43,30 @@ def test_rc_charging_step_response():
         assert abs(got_num - exp_num) < 1e-4
 
 
+def test_tr_reads_a_bare_constant_source_as_a_step():
+    """`e1,1,0,5` in TR is a 5 V step, not 5.delta(t).
+
+    Issue #77: tr() moves each source into the s-domain itself, so a
+    constant becomes value/s. Writing `5/s` by hand must give the same
+    answer, since a value already in s is left alone -- which is what
+    makes the two spellings interchangeable in TR and why the UI stopped
+    warning about the first one.
+    """
+    R, C = 1000, 1e-6
+    t = sp.Symbol("t", positive=True)
+    bare = tr(f"e1,1,0,5:r1,1,2,{R}:c1,2,0,{C}", variables=["v_2"])["v_2"]
+    explicit = tr(f"e1,1,0,5/s:r1,1,2,{R}:c1,2,0,{C}",
+                  variables=["v_2"])["v_2"]
+    expected = 5 * (1 - sp.exp(-t / (R * C)))
+    for tv in (0.0005, 0.001, 0.005):
+        got = complex(bare.subs(t, tv))
+        assert abs(got - complex(explicit.subs(t, tv))) < 1e-9
+        assert abs(got - complex(expected.subs(t, tv))) < 1e-4
+    # The distinguishing property: an impulse response decays to zero,
+    # a step response settles at the source value.
+    assert abs(complex(bare.subs(t, 1.0)) - 5) < 1e-6
+
+
 def test_rl_natural_response_initial_condition():
     # Series R-L discharge loop: l1 (0 -> node2) with initial current I0,
     # r1 (node2 -> 0). Classic result: i_l1(t) = I0 * exp(-R t / L).
