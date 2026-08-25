@@ -113,6 +113,57 @@ def expand_time_domain_braces(text: str) -> str:
     return text.replace("{", "t2s(").replace("}", ")")
 
 
+# Polar phasors, the way every circuits textbook writes them and the way
+# versions 7 and 8 accept them: `(20<30 degrees)`, using the angle sign.
+#
+# This becomes a rectangular *number*, not `20*exp(I*pi/6)`. That is a
+# deliberate choice and it matters more than it looks. SymPy cannot reduce
+# `exp(I*pi*130/180)` to any closed form, so the expression is carried
+# unevaluated through every mesh equation of the circuit -- AS7's Example
+# 12.12 took over 25 seconds and was killed, while the same circuit with
+# rectangular sources solves in about one. Where the angle happens to
+# simplify (120 degrees, say) it is fast, which is what made the problem
+# look circuit-specific rather than notation-specific.
+#
+# The cost is exactness: `100<0 degrees` becomes 100.0 rather than 100.
+# Roberto's call, 25 Aug 2026 -- a phasor angle is a measurement, and the
+# alternative is circuits that do not solve.
+#
+# Both degree characters are accepted. The 2023 documentation uses the
+# real degree sign 111 times and the masculine ordinal -- which looks
+# identical in most fonts -- another 20, and a reader copying from either
+# should not have to know which they got.
+_ANGLE_RE = re.compile(
+    r"(\d+\.?\d*)\s*\u2220\s*([+-\u2212\u2013]?\s*\d+\.?\d*)\s*[\u00b0\u00ba]?")
+
+
+def _rectangular(magnitude: str, degrees: str) -> str:
+    """`20`, `30` -> `(17.320508+10.0j)`."""
+    import math
+
+    deg = degrees.replace("\u2212", "-").replace("\u2013", "-").replace(" ", "")
+    radians = math.radians(float(deg))
+    mag = float(magnitude)
+    re_part = mag * math.cos(radians)
+    im_part = mag * math.sin(radians)
+    # Trim the floating-point dust: cos(90 degrees) is 6.1e-17, not 0, and
+    # a stray 1e-17 in a source value is noise in every answer after it.
+    if abs(re_part) < 1e-12 * max(1.0, abs(mag)):
+        re_part = 0.0
+    if abs(im_part) < 1e-12 * max(1.0, abs(mag)):
+        im_part = 0.0
+    sign = "+" if im_part >= 0 else "-"
+    return f"({re_part!r}{sign}{abs(im_part)!r}j)"
+
+
+def expand_angle_notation(text: str) -> str:
+    """Every `A<B` phasor in `text`, as a rectangular number."""
+    if "\u2220" not in text:
+        return text
+    return _ANGLE_RE.sub(
+        lambda m: _rectangular(m.group(1), m.group(2)), text)
+
+
 def expand_value(text: str, suffix: str = "si") -> str:
     """Expand a single value field. A bare engineering-notation suffix
     ("1k", "4.7u", ...) is inherently ambiguous -- 1k could mean the SI
@@ -281,6 +332,9 @@ def expand_shorthand(text: str, si: bool = True) -> str:
     (not solved) keep the SI-prefix notation the user actually typed --
     it is only expanded to a literal number just before solving."""
     result = text
+
+    if "\u2220" in result:
+        result = expand_angle_notation(result)
 
     if "[" in result:
         result = result.replace("[", "pr(").replace("]", ")")

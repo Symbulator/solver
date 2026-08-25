@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.8 -- 25 Aug 2026
+
+### Added
+- **Polar phasors, written with the angle sign.** `(20∠ 30°)` is how
+  every circuits textbook writes a phasor and how versions 7 and 8 accept
+  one; it now works here too. Both degree characters are taken -- the real
+  degree sign and the masculine ordinal, which looks identical and appears
+  20 times in the 2023 documentation -- and a negative angle written with
+  an en dash is read rather than refused.
+
+  **It becomes a rectangular number, not `20*exp(I*pi/6)`**, and that is
+  the point rather than a detail. SymPy cannot reduce
+  `exp(I*pi*130/180)` to a closed form, so an exponential source is
+  carried unevaluated through every mesh equation of the circuit. AS7's
+  Example 12.12 written that way was killed by the web app's 25-second
+  limit and did not converge in several minutes offline; with the angle
+  sign it solves in under three, and matches the answer in print. Its
+  Example 12.3 went from 94 seconds to two.
+
+  Where an angle happens to simplify -- 120 degrees, say -- the
+  exponential form was always fast, which is what made this look like a
+  property of particular circuits rather than of the notation.
+
+  Exactness is given up deliberately: `100∠ 0°` is 100.0, not 100.
+  A phasor angle is a measurement, and the alternative is circuits that do
+  not solve.
+
 ## 0.5.7 -- 25 Aug 2026
 
 ### Fixed
