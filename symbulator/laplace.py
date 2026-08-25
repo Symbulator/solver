@@ -190,6 +190,17 @@ def tr(desc: str, params: Optional[dict] = None,
         expr = s_domain.values.get(key)
         if expr is None:
             continue
+        # A value with no `s` in it is not a waveform: an expert-mode
+        # unknown such as a source's amplitude, or an answer that simply
+        # came out constant. It is already in its final form, and
+        # transforming it is destructive rather than merely pointless --
+        # inverse_laplace_transform(1, s, t) is DiracDelta(t), and
+        # DiracDelta of a positive-only t evaluates to 0. That is how
+        # expert mode in TR came to answer 0 for a step amplitude the
+        # s-domain solve had correctly found to be 1.
+        if not getattr(expr, "has", None) or not expr.has(S):
+            time_domain[key] = expr
+            continue
         try:
             time_domain[key] = sp.simplify(sp.inverse_laplace_transform(expr, S, t))
         except Exception:

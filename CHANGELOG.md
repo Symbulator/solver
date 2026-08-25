@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.10 -- 26 Aug 2026
+
+### Fixed
+- **Expert mode in TR no longer answers zero.** An extra unknown solved
+  for in a transient analysis -- the amplitude of a source, most often --
+  came back as 0 with no error and no warning.
+
+  `tr()` runs `fd()` and inverse-Laplace-transforms what it solved. Every
+  node voltage and element current is a function of s and wants
+  transforming. An expert-mode unknown is a plain number and does not:
+  `inverse_laplace_transform(1, s, t)` is `DiracDelta(t)`, the time
+  symbol is declared positive, and DiracDelta of a positive-only symbol
+  evaluates to 0. So a step height the s-domain solve had correctly found
+  to be 1 was reported as 0.
+
+  Values with no `s` in them now pass through untransformed. AS2's
+  step-source problem in the transient lesson -- find the amplitude given
+  v_c(t) -- returns the book's 1 V again, and `fd` and `tr` agree on it.
+
+  This is the third bug caused by DiracDelta collapsing under a positive
+  t. It read as "expert mode does not work in TR" rather than as a
+  transform problem, because what it ate was a scalar rather than a
+  waveform.
+
 ## 0.5.9 -- 25 Aug 2026
 
 ### Fixed
