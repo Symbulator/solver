@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.5.11 -- 26 Aug 2026
+
+### Changed
+- **Every domain-sensitive input is read in the same domain as its
+  analysis's answers.** FD reads in s, TR reads in t. Source values
+  already did; added equations, added conditions, Evaluate expressions
+  and the Solve card now do too.
+
+  This completes a design choice made in version 8, not a new one. The
+  calculator settled the awkward case by removing TR from expert mode
+  altogether -- its prompt offers "1:DC 2:AC 3:FD" -- so there was no
+  precedent to match, only a gap to close.
+
+  A relation between plain parameters, `x = 3`, is left alone: it fixes a
+  symbol in the circuit rather than describing a signal, and dividing it
+  by s would turn a 3 V source into a ramp.
+
+- **`{...}` works wherever the convention it escapes is enforced**, not
+  only in the circuit description, and it is evaluated where it is
+  written rather than rewritten to `t2s(...)`. That is what lets a
+  failure name the brackets the reader typed instead of a function they
+  never wrote.
+
+### Fixed
+- **The time symbol is non-negative, so impulses survive.** SymPy
+  evaluates DiracDelta of a strictly positive argument to 0, so under the
+  old symbol every impulse silently vanished: a `delta(t)` source, the
+  scalar an expert-mode unknown solves to in TR, and `s2t(1)`, which
+  answered 0 where the answer is `DiracDelta(t)`. t >= 0 is also what the
+  one-sided transform is defined on, and the origin is where an impulse
+  lives.
+
+  `positive` had been chosen for tidy answers, since it lets the
+  transforms drop `Heaviside(t)`. That is folded away afterwards instead,
+  matching `Heaviside(t)` and nothing else -- `Heaviside(t - 1)` is a step
+  delayed to t = 1 and genuinely zero before then. Every documented answer
+  is unchanged.
+
+  It also removed the reason the parser bound a separate neutral `t`, so
+  `v_2 + t` in Evaluate no longer carries two identical-looking symbols
+  that never combine.
+
+- **Both ends of both transforms are checked, and a mismatch stops.**
+  `t2s(x)` wants x valid in t and must produce s; `s2t(x)` the reverse.
+  "Valid in t" means "does not mention s", not "mentions t" -- a constant
+  is valid in either, and `{5}` meaning a step of 5 keeps working.
+
+  The input check catches `s2t(exp(-t))`, which returned 0 with nothing
+  to show anything was wrong. The output check catches `t2s(1/t)`, which
+  passes the input check and comes back as an unevaluated
+  LaplaceTransform.
+
+- **`t2s` and `s2t` read strings properly.** Their docstrings advertise
+  `t2s("5")`, but they used bare `sp.sympify`, so anything past a plain
+  number was wrong: `"5*u(t)"` made an undefined function of u, `"2'k"`
+  would not parse, and `"1-e^(-t/2)"` read the caret as XOR and e as a
+  symbol. Those failures were silent, arriving as unevaluated transforms.
+
 ## 0.5.10 -- 26 Aug 2026
 
 ### Fixed

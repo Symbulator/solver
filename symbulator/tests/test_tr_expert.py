@@ -115,3 +115,46 @@ def test_a_condition_on_a_parameter_is_not_a_waveform():
     res = tr("e1,1,0,x*u(t):r,1,2,2:c,2,0,1,0", conditions=["x = 3"])
     t = sb.t
     assert sp.simplify(res.values["v_2"] - (3 - 3 * sp.exp(-t / 2))) == 0
+
+
+def test_the_transforms_read_strings_the_way_everything_else_does():
+    """t2s("5*u(t)") has to work -- the docstring advertises strings.
+
+    Both functions used bare sp.sympify, which knows none of Symbulator's
+    notation. "5*u(t)" made an undefined function of u, "2'k" would not
+    parse, and "1-e^(-t/2)" read the caret as XOR and e as a symbol,
+    yielding 1 - 1/e**(t/2). Those failures were silent before the domain
+    checks: they came back as unevaluated LaplaceTransforms rather than
+    as errors.
+    """
+    from symbulator import t2s, s2t
+
+    assert t2s("5") == 5 / sb.s
+    assert t2s("5*u(t)") == 5 / sb.s
+    assert t2s("2'k") == 2000 / sb.s
+    assert t2s("delta(t)") == 1
+    assert sp.simplify(t2s("1-e^(-t/2)") - 1 / (sb.s * (2 * sb.s + 1))) == 0
+    assert sp.simplify(s2t("1/(s+1)") - sp.exp(-sb.t)) == 0
+
+
+def test_a_transform_in_the_wrong_direction_is_refused():
+    """Both ends are checked, and the message says which end failed."""
+    from symbulator import t2s, s2t
+    from symbulator.elements import CircuitError
+
+    # already in the target domain -- nothing to transform
+    for call, arg in ((t2s, "1/s"), (s2t, "exp(-t)")):
+        try:
+            call(arg)
+        except CircuitError as exc:
+            assert "already in" in str(exc), str(exc)
+        else:
+            raise AssertionError(f"{call.__name__}({arg}) should be refused")
+
+    # no closed form -- SymPy hands back an unevaluated transform
+    try:
+        t2s("1/t")
+    except CircuitError as exc:
+        assert "does not evaluate" in str(exc), str(exc)
+    else:
+        raise AssertionError("t2s(1/t) should be refused")

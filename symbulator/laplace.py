@@ -47,6 +47,24 @@ s = S
 TIME_IN = sp.Symbol("t")
 
 
+def _read(expr) -> sp.Expr:
+    """A transform argument, read the way every other input is read.
+
+    t2s and s2t are public and their docstrings advertise strings --
+    t2s("5") for a 5 V step. They used bare sp.sympify, which knows none
+    of Symbulator's notation, so anything past a plain number was wrong:
+    "5*u(t)" made an undefined function of u, "2'k" would not parse at
+    all, and "1-e^(-t/2)" read the caret as XOR and e as a symbol, giving
+    1 - 1/e**(t/2). Before the domain checks those failures were silent,
+    coming back as unevaluated transforms.
+    """
+    if isinstance(expr, str):
+        from .si_prefix import expand_value, safe_sympify
+
+        return safe_sympify(expand_value(expr), reserve_imaginary=False)
+    return sp.sympify(expr)
+
+
 def _domain_of(expr: sp.Expr) -> set:
     """Which of the two domain variables this expression mentions."""
     return {x.name for x in getattr(expr, "free_symbols", set())} & {"t", "s"}
@@ -92,7 +110,7 @@ def t2s(expr_t, t: sp.Symbol = None, s: sp.Symbol = S,
     With `t` left unset the time symbol is taken from the expression, so
     it works whichever `t` the caller's expression happens to carry. Pass
     one explicitly to override."""
-    expr = sp.sympify(expr_t)
+    expr = _read(expr_t)
     if t is None:
         named = sorted((x for x in expr.free_symbols if x.name == "t"),
                        key=str)
@@ -130,7 +148,7 @@ def _invert(expr: sp.Expr, s: sp.Symbol = S, t: sp.Symbol = T) -> sp.Expr:
 def s2t(expr_s, s: sp.Symbol = S, t: sp.Symbol = T) -> sp.Expr:
     """Inverse Laplace transform of an s-domain expression -- ports
     `s2t()`."""
-    expr = sp.sympify(expr_s)
+    expr = _read(expr_s)
     return _check_transform(expr, _invert(expr, s, t), "t",
                             "as an argument to s2t()")
 
