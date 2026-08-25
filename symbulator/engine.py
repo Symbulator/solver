@@ -173,6 +173,55 @@ class Circuit:
         for node, total in self.node_sum.items():
             self.equations.append(sp.Eq(total, 0))
 
+        # A dependent source may name a quantity that is *known* rather
+        # than solved for: a capacitor's current in AC or FD, or another
+        # source's current. Those never become unknowns, so the symbol
+        # the user wrote -- `2*i_cx` on a `j` element, say -- has nothing
+        # tying it to the capacitor it names. The system then gains a
+        # free variable that no equation constrains, and sympy answers
+        # every quantity *in terms of it*: AS7's Example 10.1 came back
+        # with `i_cx = i_cx*(0.9655 + 0.4138j) + 2.897 + 1.241j`, an
+        # equation the solver had been handed but never asked to close.
+        # It looks like a solve rather than a failure, which is what let
+        # it stand.
+        #
+        # Substituting the stamped expressions turns each such reference
+        # into a real constraint on the node voltages it is made of. The
+        # loop is because one known can name another (a `j` source
+        # controlled by a capacitor's current is exactly that); it is
+        # bounded because a source controlled by its own current is
+        # circular and must not spin here.
+        # The same hole exists for a *voltage*-controlled source. An
+        # element's voltage is never an unknown either: it is derived at
+        # reporting time as v(n1) - v(n2). So `3*v_rx` on an `e` element
+        # -- AS7's Practice Problem 10.1 -- left `v_rx` free in exactly
+        # the same way. A node may legitimately own the name (a node
+        # called `rx` would make `v_rx` its own voltage), so the node
+        # unknowns win where the two collide.
+        node_owned = {str(u) for u in self.unknowns}
+        refs = {}
+        for e in self.elements:
+            n1, n2 = getattr(e, "n1", None), getattr(e, "n2", None)
+            key = f"v_{e.name}"
+            if e.kind in ("m", "o", "t") or n1 is None or n2 is None:
+                continue
+            if key in node_owned:
+                continue
+            refs[_sym(key)] = self.v(n1) - self.v(n2)
+
+        if self.known or refs:
+            known_map = {_sym(k): v for k, v in self.known.items()}
+            known_map.update(refs)
+            for _ in range(len(known_map) + 1):
+                stepped = {k: (v.subs(known_map) if hasattr(v, "subs") else v)
+                           for k, v in known_map.items()}
+                if stepped == known_map:
+                    break
+                known_map = stepped
+            self.equations = [eq.subs(known_map) for eq in self.equations]
+            self.known = {k: (v.subs(known_map) if hasattr(v, "subs") else v)
+                          for k, v in self.known.items()}
+
     def _short(self, e: Element) -> None:
         """Zero-value r/l/c/e, and all 's' elements: v(n1) = v(n2),
         with the branch current as a fresh unknown."""

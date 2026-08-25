@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.9 -- 25 Aug 2026
+
+### Fixed
+- **A dependent source that reads a capacitor's current, or any element's
+  voltage, is now actually connected to it.** Both were being left as free
+  symbols that no equation constrained.
+
+  Most references already worked: an element's *current* is normally one of
+  the unknowns, so `2*i_r1` on a source resolves by itself. Two quantities
+  are not unknowns. A capacitor's current is stamped straight into `known`
+  as an expression in the node voltages, and an element's *voltage* is
+  derived as v(n1) - v(n2) only when the answers are reported. Naming
+  either from a source value produced a symbol with nothing behind it.
+
+  What made this hard to see is that it did not look like a failure.
+  sympy solved the system it was given and answered every quantity *in
+  terms of* the loose symbol, so AS7's Example 10.1 came back as
+  `i_cx = i_cx*(0.9655 + 0.4138j) + 2.897 + 1.241j` -- a closed-form
+  equation, printed where a number belonged, in a circuit that reported
+  itself solved. It now gives 7.59 angle 108.4 degrees, which is the
+  answer in print.
+
+  AS7's Practice Problem 10.1 (voltage-controlled) and Example 10.13
+  (controlled by a capacitor current in a chain) are fixed by the same
+  change and are now regression tests, along with Example 10.1.
+
+  Example 10.14 also solves about twice as fast, because the free symbol
+  had been enlarging the system it was carried through.
+
 ## 0.5.8 -- 25 Aug 2026
 
 ### Added
