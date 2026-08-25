@@ -285,6 +285,18 @@ def fd(desc: str, params: Optional[dict] = None, equations=None,
     initial current."""
     from .si_prefix import expand_time_domain_braces
 
+    def unbrace(items):
+        """`{...}` in an added equation or condition, same as in a value.
+
+        The brackets are how a reader says "this one is in time" while
+        FD reads everything in s. That has to hold wherever the
+        convention is enforced, not only in the circuit description --
+        otherwise the rule is imposed in four places and escapable in
+        one."""
+        if not items:
+            return items
+        return [expand_time_domain_braces(str(x)) for x in items]
+
     return _run(expand_time_domain_braces(desc), "fd", params=params,
-                equations=equations, unknowns=unknowns, conditions=conditions,
-                suffix=suffix)
+                equations=unbrace(equations), unknowns=unknowns,
+                conditions=unbrace(conditions), suffix=suffix)

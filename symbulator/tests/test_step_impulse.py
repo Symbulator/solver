@@ -12,6 +12,8 @@ unlike the names in `_allowed_namespace`, which are taken from everyone.
 """
 import sympy as sp
 
+import symbulator as sb
+
 from symbulator import tr
 from symbulator.elements import parse_circuit
 from symbulator.si_prefix import (expand_shorthand, expand_value,
@@ -68,13 +70,13 @@ def test_step_reaches_sympy_as_heaviside():
     # `t` parses as a neutral symbol on purpose -- see
     # test_a_positive_t_would_erase_the_impulse below.
     assert safe_sympify(expand_value("V*u(t)")) == (
-        sp.Symbol("V") * sp.Heaviside(sp.Symbol("t")))
+        sp.Symbol("V") * sp.Heaviside(sb.t))
 
 
 def test_impulse_reaches_sympy_as_diracdelta():
     got = safe_sympify(expand_value(f"i*{DELTA}(t)"),
                        reserve_imaginary=False)
-    assert got == sp.Symbol("i") * sp.DiracDelta(sp.Symbol("t"))
+    assert got == sp.Symbol("i") * sp.DiracDelta(sb.t)
 
 
 def test_u_is_still_an_ordinary_variable():
@@ -156,19 +158,27 @@ def test_t2s_reaches_the_solver_through_a_circuit_value():
     # written in the time domain, converted where it is typed.
     from symbulator import tr
     ramp = tr("j,0,1,t2s(t):c,1,0,2,0").values["v_1"]
-    assert sp.simplify(ramp - sp.Symbol("t", positive=True) ** 2 / 4) == 0
+    assert sp.simplify(ramp - sb.t ** 2 / 4) == 0
 
 
 def test_a_positive_t_would_erase_the_impulse():
-    """Why the parsing namespace binds a neutral `t`.
+    """Why the solver's `t` is non-negative and not strictly positive.
 
-    0.5.3 bound it to the solver's Symbol("t", positive=True) so that a
-    hand-written `t` matched the answers. That changes what an expression
-    *means*: SymPy evaluates DiracDelta of a strictly positive argument to
-    zero, so an impulse source vanished before the transform ever saw it.
+    0.5.3 bound the parsing namespace to Symbol("t", positive=True) so a
+    hand-written `t` would match the answers. That changed what an
+    expression *means*: SymPy evaluates DiracDelta of a strictly positive
+    argument to zero, so an impulse source vanished before the transform
+    ever saw it. The fix at the time was to parse a neutral t instead,
+    which kept the impulse but left two symbols that never combined.
+
+    Non-negative settles both. The impulse survives, because t >= 0 does
+    not exclude the origin where it lives, and there is one symbol again.
     """
     assert sp.DiracDelta(sp.Symbol("t", positive=True)) == 0
     assert sp.DiracDelta(sp.Symbol("t")) != 0
+    # The solver's own t is the one that has to survive, and does.
+    assert sp.DiracDelta(sb.t) != 0
+    assert sb.t.is_nonnegative and not sb.t.is_positive
     # And the parsed form is the one that survives.
     assert safe_sympify(expand_value("delta(t)")) != 0
 
@@ -180,7 +190,7 @@ def _in_time(expr):
     are written with a neutral t. Same symbol name, different assumptions,
     and subtracting them does not cancel -- so line them up first."""
     e = sp.sympify(expr)
-    T = sp.Symbol("t", positive=True)
+    T = sb.t
     return e.subs({x: T for x in e.free_symbols if x.name == "t"})
 
 
@@ -192,23 +202,23 @@ def _tr_gives(desc, key, expected):
 
 def test_a_constant_source_is_a_step():
     # symbv8s5: a NUM value becomes value/s.
-    _tr_gives("j,0,1,1:c,1,0,2,0", "v_1", sp.Symbol("t") / 2)
+    _tr_gives("j,0,1,1:c,1,0,2,0", "v_1", sb.t / 2)
 
 
 def test_a_waveform_source_is_transformed():
     # symbv8s5: a value that changes with t becomes t2s(value).
-    _tr_gives("j,0,1,t:c,1,0,2,0", "v_1", sp.Symbol("t") ** 2 / 4)
+    _tr_gives("j,0,1,t:c,1,0,2,0", "v_1", sb.t ** 2 / 4)
 
 
 def test_the_rc_step_response_is_the_step_response():
-    t = sp.Symbol("t")
+    t = sb.t
     _tr_gives("e1,1,0,12:r,1,2,2:c,2,0,1,0", "v_2", 12 - 12 * sp.exp(-t / 2))
 
 
 def test_the_calculators_spelling_gives_the_calculators_answer():
     # AS7's Example 16.1, whose answer is in print in both the version 7
     # and version 8 documentation.
-    t = sp.Symbol("t")
+    t = sb.t
     _tr_gives("e1,1,0,u(t):r1,1,2,1:r2,2,o,5:c,2,0,1/3,0:l,o,0,1,0", "v_o",
               3 * sp.sqrt(2) * sp.exp(-4 * t) * sp.sin(sp.sqrt(2) * t) / 2)
 
@@ -217,7 +227,7 @@ def test_an_s_domain_source_is_left_alone():
     # Anything already written in s is the caller having done the
     # conversion; transforming it again would be wrong. This is also what
     # keeps every existing version 9 description working.
-    t = sp.Symbol("t")
+    t = sb.t
     _tr_gives("e1,1,0,5/s:r1,1,2,1000:c1,2,0,1e-6", "v_2",
               5 - 5 * sp.exp(-1000 * t))
 
@@ -263,8 +273,34 @@ def test_the_brace_shorthand_agrees_with_writing_it_out():
 
 def test_the_parallel_shortcut_is_a_different_bracket():
     """`[...]` is pr(...) and applies in every analysis; `{...}` is t2s(...)
-    and applies only in FD. Easy to conflate, so pin both."""
+    and applies only in FD. Easy to conflate, so pin both.
+
+    The square bracket is rewritten to a call and evaluated later. The
+    curly one is evaluated where it stands, so that a failure can be
+    reported against the brackets the reader typed rather than against a
+    function they never wrote."""
     from symbulator.si_prefix import expand_shorthand, expand_time_domain_braces
     assert expand_shorthand("[2,3]", si=False) == "pr(2,3)"
-    assert expand_time_domain_braces("{u(t)}") == "t2s(u(t))"
+    assert expand_time_domain_braces("{u(t)}") == "(1/s)"
     assert expand_time_domain_braces("2*v_1") == "2*v_1"
+
+
+def test_a_bracket_that_cannot_transform_is_refused():
+    """Both ends are checked, and a failure stops rather than travelling.
+
+    `{1/s}` is already in s -- the brackets convert *from* time, so there
+    is nothing to do and the reader has misread the convention. `{1/t}`
+    has no closed-form transform. Either way the message names the
+    brackets, because that is what was typed."""
+    from symbulator.si_prefix import expand_time_domain_braces
+    from symbulator.elements import CircuitError
+
+    for bad, expect in (("{1/s}", "already in the s-domain"),
+                        ("{1/t}", "does not evaluate")):
+        try:
+            expand_time_domain_braces(bad)
+        except CircuitError as exc:
+            assert "between brackets" in str(exc), str(exc)
+            assert expect in str(exc), str(exc)
+        else:
+            raise AssertionError(f"{bad} should have been refused")

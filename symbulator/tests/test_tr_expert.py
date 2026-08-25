@@ -18,6 +18,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 import sympy as sp
 
+import symbulator as sb
+
 from symbulator import fd, tr
 
 
@@ -30,7 +32,7 @@ def test_expert_unknown_survives_the_inverse_transform():
     res = tr("e1,1,0,a*u(t):r,1,2,2:c,2,0,1,0",
              equations=["1/s-2/(2*s+1) = v_c"], unknowns=["a"])
     assert res.values["a"] == 1
-    t = sp.Symbol("t", positive=True)
+    t = sb.t
     expected = 1 - sp.exp(-t / 2)
     assert sp.simplify(res.values["v_c"] - expected) == 0
 
@@ -56,7 +58,7 @@ def test_a_scalar_answer_is_not_turned_into_an_impulse():
 def test_tr_still_transforms_the_waveforms():
     """The guard must not stop real answers being transformed."""
     res = tr("e1,1,0,1:r1,1,2,1:c1,2,0,1", variables=["i_c1"])
-    t = sp.Symbol("t", positive=True)
+    t = sb.t
     assert sp.simplify(res.values["i_c1"] - sp.exp(-t)) == 0
 
 
@@ -67,3 +69,49 @@ def test_fd_and_tr_agree_on_the_scalar():
     from symbulator.laplace import _sources_to_s
     assert fd(_sources_to_s(desc), equations=eqs, unknowns=unks).values["a"] \
         == tr(desc, equations=eqs, unknowns=unks).values["a"]
+
+
+def test_tr_reads_an_added_equation_in_the_time_domain():
+    """The equation is written the way the answers are shown.
+
+    Roberto's rule, 26 Aug 2026: everything typed into expert mode in TR
+    is in the time domain. The calculator sidestepped the question by
+    removing TR from expert mode altogether -- its prompt offers
+    "1:DC 2:AC 3:FD" -- so there is no precedent to match, only a choice
+    to make.
+
+    AS2's step-source problem, with the known voltage written plainly in
+    t rather than converted with t2s first.
+    """
+    res = tr("e1,1,0,a*u(t):r,1,2,2:c,2,0,1,0",
+             equations=["1-e^(-t/2) = v_c"], unknowns=["a"])
+    assert res.values["a"] == 1
+
+
+def test_a_steady_level_in_an_added_equation_is_a_step():
+    """`i_r1 = 5` means five amps from t = 0, not an impulse of five.
+
+    In the s-domain that is 5/s, and the conversion supplies the /s so
+    the reader does not have to.
+    """
+    res = tr("e1,1,0,a:r1,1,0,1", equations=["i_r1 = 5"], unknowns=["a"])
+    assert res.values["a"] == 5
+
+
+def test_an_equation_already_in_s_is_left_alone():
+    """A reader who converted it themselves is not converted twice."""
+    res = tr("e1,1,0,a*u(t):r,1,2,2:c,2,0,1,0",
+             equations=["1/s-2/(2*s+1) = v_c"], unknowns=["a"])
+    assert res.values["a"] == 1
+
+
+def test_a_condition_on_a_parameter_is_not_a_waveform():
+    """`x = 3` fixes a symbol in the circuit; it is not a signal.
+
+    Dividing it by s -- the treatment a steady level gets -- would make
+    the source 3/s**2, a ramp. The rule looks for an answer name on one
+    side before treating a relation as being about a waveform.
+    """
+    res = tr("e1,1,0,x*u(t):r,1,2,2:c,2,0,1,0", conditions=["x = 3"])
+    t = sb.t
+    assert sp.simplify(res.values["v_2"] - (3 - 3 * sp.exp(-t / 2))) == 0

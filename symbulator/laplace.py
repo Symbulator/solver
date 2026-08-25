@@ -17,12 +17,23 @@ import sympy as sp
 
 from .analysis import Result, fd
 
-T = sp.Symbol("t", positive=True)
+T = sp.Symbol("t", nonnegative=True)
 S = sp.Symbol("s")
-#: Public names for the same two symbols. `t` carries positive=True so
-#: that inverse Laplace transforms simplify (no stray Heaviside(t)); a
-#: bare sp.Symbol("t") is a *different* symbol and subs() on it silently
-#: does nothing. Import these instead of re-creating them.
+#: Public names for the same two symbols. `t` is non-negative, not
+#: strictly positive, and the difference is load-bearing: SymPy evaluates
+#: DiracDelta of a strictly positive argument to 0, so under `positive`
+#: every impulse silently disappeared -- a delta(t) source, the scalar an
+#: expert-mode unknown solves to in TR, and s2t(1), which answered 0
+#: instead of DiracDelta(t). t >= 0 is also what the one-sided transform
+#: is actually defined on, and the origin is exactly where an impulse
+#: lives.
+#:
+#: `positive` was chosen for tidy answers -- it lets the transforms drop
+#: Heaviside(t). `_invert` below folds that away afterwards instead, so
+#: the answers read the same as they always have.
+#:
+#: A bare sp.Symbol("t") is a *different* symbol and subs() on it
+#: silently does nothing. Import these instead of re-creating them.
 t = T
 s = S
 
@@ -36,7 +47,44 @@ s = S
 TIME_IN = sp.Symbol("t")
 
 
-def t2s(expr_t, t: sp.Symbol = None, s: sp.Symbol = S) -> sp.Expr:
+def _domain_of(expr: sp.Expr) -> set:
+    """Which of the two domain variables this expression mentions."""
+    return {x.name for x in getattr(expr, "free_symbols", set())} & {"t", "s"}
+
+
+def _check_transform(expr, result, into: str, origin: str):
+    """Both ends of a transform, or a CircuitError explaining which failed.
+
+    `into` is the domain being transformed *into* -- "s" for t2s, "t" for
+    s2t. `origin` names how the reader asked for it, so the message points
+    at what they typed: "between brackets" or "as an argument to t2s()".
+    """
+    from .elements import CircuitError
+
+    frm = "t" if into == "s" else "s"
+
+    # -- the input end. Containing neither variable is fine: a constant is
+    #    a valid expression in either domain, and {5} means a step of 5.
+    if into in _domain_of(expr):
+        raise CircuitError(
+            f"The expression provided {origin} is already in the "
+            f"{into}-domain, so there is nothing to transform. "
+            f"{'Brackets convert' if 'bracket' in origin else 'This converts'} "
+            f"from {frm} to {into}.")
+
+    # -- the output end. An unevaluated transform is SymPy saying it could
+    #    not find a closed form; it must not travel any further.
+    unevaluated = (sp.LaplaceTransform if into == "s"
+                   else sp.InverseLaplaceTransform)
+    if result.has(unevaluated) or frm in _domain_of(result):
+        raise CircuitError(
+            f"The expression provided {origin} does not evaluate to a "
+            f"valid {into}-domain expression.")
+    return result
+
+
+def t2s(expr_t, t: sp.Symbol = None, s: sp.Symbol = S,
+        validate: bool = True) -> sp.Expr:
     """Laplace transform of a time-domain expression -- ports `t2s()`.
     Use this to prepare a source value for `fd()`/`tr()`, e.g.
     `t2s("5")` for a 5 V step, or hand-write it directly ("5/s").
@@ -49,15 +97,42 @@ def t2s(expr_t, t: sp.Symbol = None, s: sp.Symbol = S) -> sp.Expr:
         named = sorted((x for x in expr.free_symbols if x.name == "t"),
                        key=str)
         t = named[0] if named else TIME_IN
-    result = sp.laplace_transform(expr, t, s, noconds=True)
-    return sp.simplify(result)
+    result = sp.simplify(sp.laplace_transform(expr, t, s, noconds=True))
+    if not validate:
+        # The caller checks it themselves, so that a failure can be
+        # reported against what the reader actually typed. The bracket
+        # form does this: blaming t2s() for brackets names the wrong
+        # thing.
+        return result
+    return _check_transform(expr, result, "s", "as an argument to t2s()")
+
+
+def _invert(expr: sp.Expr, s: sp.Symbol = S, t: sp.Symbol = T) -> sp.Expr:
+    """Inverse Laplace transform, with `Heaviside(t)` folded away.
+
+    Every answer here exists only for t >= 0, so a Heaviside(t) factor
+    multiplying the whole thing says nothing and makes it harder to read.
+    Folding it is what lets the time symbol be non-negative -- which is
+    what lets an impulse survive -- without every answer growing a factor
+    it never used to carry.
+
+    Only `Heaviside(t)` exactly. `Heaviside(t - 1)` is a step delayed to
+    t = 1 and is genuinely zero before then; folding that would turn a
+    delayed source into an immediate one.
+    """
+    got = sp.inverse_laplace_transform(expr, s, t)
+    got = got.replace(
+        lambda e: isinstance(e, sp.Heaviside) and e.args[0] == t,
+        lambda e: sp.Integer(1))
+    return sp.simplify(got)
 
 
 def s2t(expr_s, s: sp.Symbol = S, t: sp.Symbol = T) -> sp.Expr:
     """Inverse Laplace transform of an s-domain expression -- ports
     `s2t()`."""
     expr = sp.sympify(expr_s)
-    return sp.simplify(sp.inverse_laplace_transform(expr, s, t))
+    return _check_transform(expr, _invert(expr, s, t), "t",
+                            "as an argument to s2t()")
 
 
 # --------------------------------------------------------------------------
@@ -165,6 +240,65 @@ def _sources_to_s(desc: str, s: sp.Symbol = S) -> str:
     return ":".join(out) if changed else desc
 
 
+def _side_to_s(expr: sp.Expr, elements, s: sp.Symbol = S) -> sp.Expr:
+    """One side of a time-domain relation, moved into the s-domain.
+
+    The same four cases as `_source_to_s`, for the same reasons."""
+    if any(x.name == "t" for x in expr.free_symbols):
+        if _is_controlled(expr, elements):
+            # Both a waveform and an answer name -- there is no single
+            # right reading, so leave it and let the solver complain
+            # rather than transform half of it.
+            return expr
+        try:
+            return t2s(expr, s=s)
+        except Exception:                                     # noqa: BLE001
+            return expr
+    if expr.has(s):
+        return expr
+    if _is_controlled(expr, elements):
+        return expr
+    return expr / s
+
+
+def _relation_to_s(text: str, elements, s: sp.Symbol = S) -> str:
+    """An expert equation or condition, read as a statement about time.
+
+    Returns it in the s-domain, which is where tr() actually solves.
+    A relation naming no answer at all -- `x = 3`, fixing a symbol in
+    the circuit -- is about a parameter rather than a waveform and is
+    returned unchanged; dividing that by s would be nonsense.
+    """
+    from .si_prefix import expand_value, safe_sympify
+
+    if "=" not in str(text):
+        return text
+    lhs_text, rhs_text = str(text).split("=", 1)
+    try:
+        lhs = safe_sympify(expand_value(lhs_text), reserve_imaginary=False)
+        rhs = safe_sympify(expand_value(rhs_text), reserve_imaginary=False)
+    except Exception:                                         # noqa: BLE001
+        return text
+
+    if not (_is_controlled(lhs, elements) or _is_controlled(rhs, elements)):
+        return text
+
+    return f"{_side_to_s(lhs, elements, s)} = {_side_to_s(rhs, elements, s)}"
+
+
+def _relations_to_s(items, desc: str, s: sp.Symbol = S):
+    """Every equation or condition in `items`, moved into the s-domain."""
+    if not items:
+        return items
+    from .elements import parse_circuit
+
+    try:
+        elements = parse_circuit(desc)
+    except Exception:                                         # noqa: BLE001
+        return items
+    return [_relation_to_s(item, elements, s) for item in items]
+
+
 def tr(desc: str, params: Optional[dict] = None,
        variables: Optional[Iterable[str]] = None,
        t: sp.Symbol = T, equations=None, unknowns=None,
@@ -180,9 +314,15 @@ def tr(desc: str, params: Optional[dict] = None,
     to find a closed form. A variable that can't be transformed is left
     out of the result rather than raising, since the rest of the
     circuit's answers are usually still valid and useful."""
+    # Everything the reader typed is in the time domain -- the domain
+    # the answers are shown in -- so the added equations and conditions
+    # are converted the same way the sources are. Without this they were
+    # read in s while the answers around them were in t.
     s_domain = fd(_sources_to_s(desc), params=params,
-                  equations=equations, unknowns=unknowns,
-                  conditions=conditions, suffix=suffix)
+                  equations=_relations_to_s(equations, desc),
+                  unknowns=unknowns,
+                  conditions=_relations_to_s(conditions, desc),
+                  suffix=suffix)
     keys = list(variables) if variables is not None else list(s_domain.values.keys())
 
     time_domain = {}
@@ -194,15 +334,16 @@ def tr(desc: str, params: Optional[dict] = None,
         # unknown such as a source's amplitude, or an answer that simply
         # came out constant. It is already in its final form, and
         # transforming it is destructive rather than merely pointless --
-        # inverse_laplace_transform(1, s, t) is DiracDelta(t), and
-        # DiracDelta of a positive-only t evaluates to 0. That is how
-        # expert mode in TR came to answer 0 for a step amplitude the
-        # s-domain solve had correctly found to be 1.
+        # inverse_laplace_transform(1, s, t) is DiracDelta(t), which is
+        # not what a source amplitude means even now that the delta
+        # survives: the number 1 is the answer, not an impulse of 1.
+        # (Under the old strictly-positive t it was worse -- the delta
+        # collapsed to 0, so the amplitude came back as nothing at all.)
         if not getattr(expr, "has", None) or not expr.has(S):
             time_domain[key] = expr
             continue
         try:
-            time_domain[key] = sp.simplify(sp.inverse_laplace_transform(expr, S, t))
+            time_domain[key] = _invert(expr, S, t)
         except Exception:
             continue  # leave it out rather than fail the whole analysis
 

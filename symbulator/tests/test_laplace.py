@@ -34,12 +34,12 @@ def test_rc_charging_step_response():
     R, C = 1000, 1e-6
     res = fd(f"e1,1,0,5/s:r1,1,2,{R}:c1,2,0,{C}")
     tau = R * C
-    expected_vc = 5 * (1 - sp.exp(-sp.Symbol('t', positive=True) / tau))
+    expected_vc = 5 * (1 - sp.exp(-t / tau))
     time_res = tr(f"e1,1,0,5/s:r1,1,2,{R}:c1,2,0,{C}", variables=["v_2"])
     got = time_res["v_2"]
     for tv in (0.0005, 0.001, 0.005):
-        got_num = complex(got.subs(sp.Symbol('t', positive=True), tv))
-        exp_num = complex(expected_vc.subs(sp.Symbol('t', positive=True), tv))
+        got_num = complex(got.subs(t, tv))
+        exp_num = complex(expected_vc.subs(t, tv))
         assert abs(got_num - exp_num) < 1e-4
 
 
@@ -53,7 +53,6 @@ def test_tr_reads_a_bare_constant_source_as_a_step():
     warning about the first one.
     """
     R, C = 1000, 1e-6
-    t = sp.Symbol("t", positive=True)
     bare = tr(f"e1,1,0,5:r1,1,2,{R}:c1,2,0,{C}", variables=["v_2"])["v_2"]
     explicit = tr(f"e1,1,0,5/s:r1,1,2,{R}:c1,2,0,{C}",
                   variables=["v_2"])["v_2"]
@@ -100,6 +99,13 @@ def test_time_symbol_is_exported_and_result_at_substitutes_by_name():
     assert abs(res["v_2"].subs(sb.t, 0.001) - want) < 1e-9
     assert abs(res.at("v_2", t=0.001) - want) < 1e-9
     assert abs(res.at(t=0.001)["v_2"] - want) < 1e-9
-    assert sb.t.is_positive and sb.s == sp.Symbol("s")
-    # The trap itself is unchanged (SymPy semantics), documented, not hidden.
+    # Non-negative rather than strictly positive: DiracDelta of a
+    # strictly positive argument evaluates to 0, which erased every
+    # impulse. t >= 0 is also what the one-sided transform is
+    # defined on.
+    assert sb.t.is_nonnegative and not sb.t.is_positive
+    assert sb.s == sp.Symbol("s")
+    # The trap itself is unchanged (SymPy semantics), documented, not
+    # hidden: a hand-built t is a different symbol whatever its
+    # assumptions, and subs() on it does nothing at all.
     assert res["v_2"].subs(sp.Symbol("t"), 0.001) == res["v_2"]

@@ -106,11 +106,58 @@ def bare_suffix_match(text: str):
 # already have been split into separate fields long before here.
 
 
+def _brace_groups(text: str):
+    """Every balanced `{...}` in `text`, as (start, end) slices."""
+    out, depth, start = [], 0, None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                out.append((start, i + 1))
+    return out
+
+
 def expand_time_domain_braces(text: str) -> str:
-    """`{expr}` -> `t2s(expr)`, for a source value written in time."""
+    """`{expr}` -> the s-domain expression it stands for.
+
+    FD reads every domain-sensitive input in s; the brackets are how a
+    reader says "this one is in time". So the transform is done here,
+    where it is still known that brackets were what was written -- a
+    plain textual rewrite to `t2s(...)` would leave the error message
+    blaming the function for something the reader never typed.
+
+    Both ends are checked, and a failure stops the run rather than
+    letting an unevaluated transform travel on into the equations.
+    """
     if "{" not in text:
         return text
-    return text.replace("{", "t2s(").replace("}", ")")
+
+    from .laplace import t2s, _check_transform
+
+    out, last = [], 0
+    for start, end in _brace_groups(text):
+        inner = text[start + 1:end - 1].strip()
+        out.append(text[last:start])
+        if not inner:
+            out.append(text[start:end])       # `{}` is not ours to read
+            last = end
+            continue
+        try:
+            expr = safe_sympify(expand_value(inner), reserve_imaginary=False)
+        except Exception:                                     # noqa: BLE001
+            out.append(text[start:end])       # not an expression; leave it
+            last = end
+            continue
+        result = _check_transform(expr, t2s(expr, validate=False), "s",
+                                  "between brackets")
+        out.append(f"({result})")
+        last = end
+    out.append(text[last:])
+    return "".join(out)
 
 
 # Polar phasors, the way every circuits textbook writes them and the way
@@ -430,14 +477,17 @@ def _allowed_namespace(reserve_imaginary: bool = True):
         # sympify hands back a Python str and every formatter
         # downstream is expecting a SymPy object.
         "t2s": t2s, "s2t": s2t,
-        # `s` is the solver's own symbol. `t` is deliberately NOT:
-        # tr() writes its answers in Symbol("t", positive=True), but
-        # binding that here changes what expressions *mean* rather than
-        # only which symbol they use -- SymPy evaluates DiracDelta of a
-        # strictly positive argument to 0, so `delta(t)` silently became
-        # nothing and an impulse source disappeared from the circuit.
-        # Parse with a neutral t; the transforms below reconcile the two.
-        "t": sp.Symbol("t"), "s": S,
+        # Both are the solver's own symbols. `t` used to be parsed as a
+        # separate neutral symbol, because binding the solver's t --
+        # strictly positive at the time -- made SymPy evaluate
+        # DiracDelta of it to 0, and `delta(t)` silently became nothing.
+        # The solver's t is non-negative now, which keeps the impulse, so
+        # the workaround is gone and there is one t again.
+        #
+        # That matters beyond impulses: two identical-looking t symbols
+        # never combine, so `v_2 + t` in Evaluate carried both and no
+        # amount of simplifying would bring them together.
+        "t": T, "s": S,
     }
     if reserve_imaginary:
         # i, I, j and J all mean the imaginary unit. Reserving all four
