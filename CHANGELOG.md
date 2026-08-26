@@ -21,11 +21,13 @@
   parameter and for an equation naming a derived quantity, which mean
   the same thing in either round. It is not right for an equation that
   pins an unknown element value from a measurement: that measurement
-  holds in the circuit as given, not in the shorted copy, so the rounds
-  would solve for different values and vth/ino would mix two circuits.
-  Determine such a value with a plain solve first. This is documented on
-  `th()` rather than guarded, since telling the two apart reliably would
-  mean guessing at intent.
+  holds in the circuit as given, not in the shorted copy, so the two
+  rounds are asking for different things. In practice the short-circuit
+  round then has no consistent solution and the solve raises, which is
+  the outcome you want -- but it is a consequence rather than a guard,
+  so determine such a value with a plain solve first and put the number
+  in the description. Documented on `th()` rather than guarded, since
+  telling the two kinds of extra apart means guessing at intent.
 
 
 ## 0.5.11 -- 26 Aug 2026

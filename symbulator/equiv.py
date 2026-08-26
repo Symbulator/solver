@@ -79,9 +79,11 @@ def th(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
     It is not right for an equation that pins an unknown *element value*
     from a measurement (`ir2 = 4` for an unknown `rx`): that measurement
     holds in the circuit as given, not in the shorted copy, so the two
-    rounds would solve for different `rx` and the ratio vth/ino would
-    mix two different circuits. Determine such a value with a plain
-    solve first and put the number in the description."""
+    rounds are asking for different things. In practice the short-circuit
+    round then has no consistent solution and the solve raises rather
+    than returning a mixed answer -- but do not rely on the refusal.
+    Determine such a value with a plain solve first and put the number in
+    the description."""
     n1, n2 = str(n1), str(n2)
 
     open_circuit = _run(desc, domain, omega=omega, params=params,
