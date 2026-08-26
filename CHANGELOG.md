@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.5.13 -- 27 Aug 2026
+
+### Fixed
+- **`th()` no longer throws away the half of the answer it found.** The
+  tool runs two solves: the circuit as given, for the open-circuit
+  voltage, and the circuit with a short across the terminals, for the
+  Norton current. The second was allowed to take the first down with it,
+  so a circuit whose short-circuit round has no solution returned
+  nothing at all -- where the calculator versions left you holding the
+  Thevenin voltage.
+
+  An ideal op-amp output is the case that found this. Shorting it asks
+  what current flows when a fixed voltage sits across zero resistance,
+  and the system has no solution. But the question does have an answer,
+  and it is the one the documentation asserts without ever showing: the
+  current is unbounded, so the equivalent impedance is zero.
+
+  So the short is now measured rather than assumed. When it will not
+  solve, the terminals get a resistance `x_test` instead of a short and
+  the current's limit is taken as `x_test` goes to zero -- which is what
+  a short is. An unbounded limit means `ino` is infinite and `z` is 0,
+  reported as a result rather than guessed at. A finite one means the
+  short was merely awkward to solve and the answer was there all along.
+  Either way `TheveninResult.note` says which happened; it is empty on
+  an ordinary run, and ordinary runs are untouched.
+
+  Only if the limit cannot settle it either does the call still fail --
+  and the message now carries the open-circuit voltage, so the half that
+  was found is not lost.
+
+### Added
+- `TheveninResult.note`, a sentence explaining how the short-circuit
+  round was resolved when it was not simply solved. Empty otherwise.
+
 ## 0.5.12 -- 26 Aug 2026
 
 ### Added

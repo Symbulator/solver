@@ -51,6 +51,9 @@ class TheveninResult:
     ino: sp.Expr       # short-circuit current from n1 to n2
     z: sp.Expr          # Req (dc) or Zeq (ac) = vth / ino
     pmax: sp.Expr        # maximum power transferable to a matched load
+    #: Set when the short-circuit round had to be reasoned about rather
+    #: than solved -- see th(). Empty on an ordinary run.
+    note: str = ""
 
     def __repr__(self) -> str:
         """Labels the equivalent-impedance field "req" or "zeq" to match
@@ -60,6 +63,48 @@ class TheveninResult:
         z_label = "req" if self.domain == "dc" else "zeq"
         return (f"TheveninResult(domain={self.domain!r}, vth={self.vth}, "
                 f"ino={self.ino}, {z_label}={self.z}, pmax={self.pmax})")
+
+
+_AWKWARD_NOTE = (
+    "The short-circuit round could not be solved directly; the current was "
+    "found as the limit of a vanishing resistance instead.")
+
+
+def _short_by_limit(desc, n1, n2, run_kwargs):
+    """(current, note) for a short that could not be solved directly.
+
+    A short is a resistance of zero, so put one of value x across the
+    terminals and let x go to zero. The limit is what the short would have
+    carried. `sp.oo` back means unbounded, which is a real answer about the
+    circuit and not a failure: the terminals hold their voltage whatever
+    current is drawn, so the equivalent impedance is zero.
+
+    The infinity test is `has(oo, zoo)` rather than `is_infinite`. With a
+    symbolic source the limit comes back as `oo*sign(Abs(vs*(r1+r2)/r1))`,
+    whose `is_infinite` is None -- and that symbolic case is precisely the
+    one this exists for.
+    """
+    probe = _run(f"{desc}:rtest,{n1},{n2},x_test", **run_kwargs)
+    current = probe.i("rtest")
+
+    # Match the symbol by name rather than rebuilding it. A Symbol carries
+    # its assumptions in its identity, so Symbol("x_test", positive=True)
+    # is a different symbol from the plain one the parser made, and a limit
+    # taken in the wrong one silently finds nothing to do.
+    xs = [t for t in current.free_symbols if t.name == "x_test"]
+    if not xs:
+        # The test resistance cancelled out, so the current never depended
+        # on it and the short carries exactly this.
+        return sp.simplify(current), _AWKWARD_NOTE
+    x = xs[0]
+
+    if sp.limit(sp.Abs(current), x, 0, "+").has(sp.oo, sp.zoo):
+        return sp.oo, (
+            "The short-circuit current is unbounded, so the equivalent is a "
+            "voltage source with no impedance in series with it.")
+    # Abs settled whether it is finite; this recovers the signed value,
+    # which in AC and FD carries the phase as well.
+    return sp.simplify(sp.limit(current, x, 0, "+")), _AWKWARD_NOTE
 
 
 def th(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
@@ -81,7 +126,10 @@ def th(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
     holds in the circuit as given, not in the shorted copy, so the two
     rounds are asking for different things. In practice the short-circuit
     round then has no consistent solution and the solve raises rather
-    than returning a mixed answer -- but do not rely on the refusal.
+    than returning a mixed answer -- but do not rely on the refusal, and
+    rely on it less than before: a raise now falls through to the limit
+    probe below, which may well settle what the short could not and
+    return a confident answer to a question that was malformed.
     Determine such a value with a plain solve first and put the number in
     the description."""
     n1, n2 = str(n1), str(n2)
@@ -96,21 +144,44 @@ def th(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
             "This circuit is not active (open-circuit voltage is 0). Try er() instead."
         )
 
+    run_kwargs = dict(domain=domain, omega=omega, params=params,
+                      use_rms=use_rms, equations=equations,
+                      unknowns=unknowns, conditions=conditions,
+                      suffix=suffix)
+
     test_name = "stest"
-    short_circuit = _run(f"{desc}:{test_name},{n1},{n2}", domain, omega=omega,
-                          params=params, use_rms=use_rms, equations=equations,
-                          unknowns=unknowns, conditions=conditions,
-                          suffix=suffix)
-    ino = sp.simplify(short_circuit.i(test_name))
+    note = ""
+    try:
+        short_circuit = _run(f"{desc}:{test_name},{n1},{n2}", **run_kwargs)
+        ino = sp.simplify(short_circuit.i(test_name))
+    except Exception as short_failed:
+        # The open-circuit round already answered half the question, and
+        # throwing that away with the other half is what #107 was.
+        try:
+            ino, note = _short_by_limit(desc, n1, n2, run_kwargs)
+        except Exception:
+            raise CircuitError(
+                f"The open-circuit voltage is {vth}, but the short-circuit "
+                f"current could not be found, either directly or as the "
+                f"limit of a vanishing resistance: {short_failed}"
+            ) from short_failed
 
-    z = sp.simplify(vth / ino)
-    if domain == "dc":
-        pmax = sp.simplify(vth * ino / 4)
+    if ino is sp.oo or ino == sp.oo:
+        # Unbounded current through a short means no impedance in the way,
+        # and a source that can deliver without limit.
+        z, pmax = sp.Integer(0), sp.oo
     else:
-        denom = 4 if use_rms else 8
-        pmax = sp.simplify(sp.Abs(vth) ** 2 / (denom * sp.re(z)))
+        z = sp.simplify(vth / ino)
+        if domain == "dc":
+            pmax = sp.simplify(vth * ino / 4)
+        else:
+            denom = 4 if use_rms else 8
+            real = sp.re(z)
+            pmax = (sp.oo if real == 0
+                    else sp.simplify(sp.Abs(vth) ** 2 / (denom * real)))
 
-    return TheveninResult(domain=domain, vth=vth, ino=ino, z=z, pmax=pmax)
+    return TheveninResult(domain=domain, vth=vth, ino=ino, z=z, pmax=pmax,
+                          note=note)
 
 
 def er(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,

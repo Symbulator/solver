@@ -14,6 +14,7 @@ import sympy as sp
 import pytest
 
 from symbulator import dc, ac, th, er, port
+from symbulator.elements import CircuitError
 
 
 def approx_eq(a, b, tol=1e-9):
@@ -134,3 +135,55 @@ def test_equivalents_without_expert_extras_are_unchanged():
     eq = th("e,1,0,3.3:r1,1,2,66:r2,2,0,24", "2", "0")
     assert approx_eq(eq.vth, sp.Rational(33, 10) * 24 / 90)
     assert approx_eq(eq.z, sp.Rational(66 * 24, 90))
+
+
+# ---- the short-circuit round is allowed to be hard ------------------------
+#
+# th() runs two solves, and until #107 the second was allowed to take the
+# first down with it: a circuit whose short-circuit round has no solution
+# returned nothing, throwing away an open-circuit voltage it had already
+# found. An ideal op amp output is the case in point -- shorting it asks
+# what current flows when a fixed voltage sits across zero resistance.
+
+OPAMP = "e,1,0,vs:r1,2,0,r1:r2,2,3,r2:o,1,2,3"
+
+
+def test_th_reports_a_zero_impedance_source_rather_than_failing():
+    # Bo2's Drill Exercise 3.11. The chapter asserts the Thevenin
+    # resistance is 0 without ever showing it; this is the showing.
+    vs, r1, r2 = sp.symbols("vs r1 r2")
+    eq = th(OPAMP, "3", "0")
+    assert sp.simplify(eq.vth - vs * (r1 + r2) / r1) == 0
+    assert eq.z == 0
+    assert eq.ino == sp.oo
+    assert eq.note
+
+
+def test_th_finds_the_unbounded_current_in_ac_and_fd_too():
+    for kwargs in ({"domain": "ac", "omega": 1000}, {"domain": "fd"}):
+        eq = th(OPAMP, "3", "0", **kwargs)
+        assert eq.z == 0, kwargs
+        assert eq.ino == sp.oo, kwargs
+
+
+def test_th_leaves_an_ordinary_circuit_exactly_as_it_was():
+    # The limit route must not be reachable when the short solves, and the
+    # note must stay empty so nothing is said about a circuit that needed
+    # nothing said.
+    eq = th("e,1,0,10:r1,1,2,5", "2", "0")
+    assert eq.vth == 10 and eq.ino == 2 and eq.z == 5
+    assert eq.note == ""
+
+
+def test_th_keeps_the_open_circuit_voltage_when_all_else_fails(monkeypatch):
+    # Worst case: neither the short nor the limit settles it. The reader
+    # still gets the half that was found, in the message.
+    from symbulator import equiv as _equiv
+
+    def _no(*a, **k):
+        raise RuntimeError("probe declined")
+
+    monkeypatch.setattr(_equiv, "_short_by_limit", _no)
+    with pytest.raises(CircuitError) as caught:
+        _equiv.th(OPAMP, "3", "0")
+    assert "open-circuit voltage is" in str(caught.value)
