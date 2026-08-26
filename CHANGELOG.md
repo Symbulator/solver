@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.12 -- 26 Aug 2026
+
+### Added
+- **Expert mode works with the equivalent tools.** `th()`, `er()` and
+  `port()` now accept `equations`, `unknowns` and `conditions` and pass
+  them to every solve they run. The original barred expert mode from
+  these tools, but nothing in the physics required it: an equivalent is
+  orchestration over the same solver, and the arguments simply were not
+  being handed on.
+
+  This is what lets a dependent source be defined against a derived
+  name -- `vx` with `vx = va - vb` as an added equation and `vx` as an
+  added unknown -- while asking for a Thevenin equivalent, which
+  previously had to be written by substituting the difference into the
+  source's value by hand.
+
+  `th()` runs two rounds, an open-circuit solve and a short-circuit one,
+  and the extras go into both. That is right for a condition on a
+  parameter and for an equation naming a derived quantity, which mean
+  the same thing in either round. It is not right for an equation that
+  pins an unknown element value from a measurement: that measurement
+  holds in the circuit as given, not in the shorted copy, so the rounds
+  would solve for different values and vth/ino would mix two circuits.
+  Determine such a value with a plain solve first. This is documented on
+  `th()` rather than guarded, since telling the two apart reliably would
+  mean guessing at intent.
+
+
 ## 0.5.11 -- 26 Aug 2026
 
 ### Changed

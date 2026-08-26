@@ -100,3 +100,37 @@ def test_port_ac_series_impedance():
     assert approx_eq(params["12"], sp.simplify(-1 / Z))
     assert approx_eq(params["21"], sp.simplify(-1 / Z))
     assert approx_eq(params["22"], sp.simplify(1 / Z))
+
+
+def test_th_accepts_expert_equations_and_unknowns():
+    # TR5's Example 4-8 from the tutorial: the dependent source's value
+    # is a derived name, vx, defined as the difference between two node
+    # voltages. On the calculator that took a `Define vx=va-vb` line
+    # before the th script ran; here the definition is an added equation
+    # with vx as an added unknown, and it has to reach both of th()'s
+    # rounds for the answers to come out in terms of vs and mu.
+    mu, vs, ro = sp.symbols("mu vs ro")
+    eq = th("ei,a,0,vs:ed,1,0,mu*(vx):ro,b,1,ro", "b", "0",
+            equations=["vx = v_a - v_b"], unknowns=["vx"])
+    assert sp.simplify(eq.vth - vs * mu / (mu + 1)) == 0
+    assert sp.simplify(eq.z - ro / (mu + 1)) == 0
+
+
+def test_er_accepts_an_expert_condition():
+    # A condition fixes a symbol in the circuit, so the equivalent
+    # resistance of two parallel resistors with a symbolic value should
+    # come back as the number the condition implies.
+    free = er("r1,a,0,r:r2,a,0,6", "a", "0")
+    assert sp.simplify(free - sp.sympify("6*r/(r + 6)")) == 0
+    fixed = er("r1,a,0,r:r2,a,0,6", "a", "0", conditions=["r = 3"])
+    assert sp.simplify(fixed - sp.Rational(2)) == 0
+
+
+def test_equivalents_without_expert_extras_are_unchanged():
+    # The extras are optional and default to nothing, so a plain call
+    # must behave exactly as it did before they existed.
+    # The source value 3.3 is a float, so these answers are floats too --
+    # compare the way the rest of this file does rather than exactly.
+    eq = th("e,1,0,3.3:r1,1,2,66:r2,2,0,24", "2", "0")
+    assert approx_eq(eq.vth, sp.Rational(33, 10) * 24 / 90)
+    assert approx_eq(eq.z, sp.Rational(66 * 24, 90))

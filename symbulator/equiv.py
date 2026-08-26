@@ -10,6 +10,12 @@ given circuit description and re-running the existing `dc`/`ac` engine
 answer by substitution after a single solve, mirroring how the original
 TI-Basic used the test sources' own names as their (initially undefined,
 i.e. symbolic) values and read off ratios/derivatives after the fact.
+
+All three accept the expert-mode `equations`/`unknowns`/`conditions` and
+pass them to every round they run. The original barred expert mode from
+these tools; nothing about the physics required that, only that the
+orchestration below had not been given the arguments to pass on. See
+`th()` for the one case where "every round" is the wrong answer.
 """
 
 from __future__ import annotations
@@ -58,15 +64,30 @@ class TheveninResult:
 
 def th(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
         params: Optional[dict] = None, use_rms: bool = False,
+        equations=None, unknowns=None, conditions=None,
         suffix: str = "ask") -> TheveninResult:
     """Thevenin/Norton equivalent of the circuit `desc` as seen between
     nodes `n1` and `n2` -- ports `th()`. Works for active circuits (ones
     with independent sources); for source-free circuits use `er()`
-    instead (this mirrors the original's own guidance message)."""
+    instead (this mirrors the original's own guidance message).
+
+    `equations`/`unknowns`/`conditions` are the expert-mode extras, and
+    they are added to *both* rounds -- the open-circuit solve and the
+    short-circuit one. That is right for a condition on a parameter
+    (`x = 3`) and for an equation that names a derived quantity
+    (`vx = va-vb`), both of which mean the same thing in either round.
+    It is not right for an equation that pins an unknown *element value*
+    from a measurement (`ir2 = 4` for an unknown `rx`): that measurement
+    holds in the circuit as given, not in the shorted copy, so the two
+    rounds would solve for different `rx` and the ratio vth/ino would
+    mix two different circuits. Determine such a value with a plain
+    solve first and put the number in the description."""
     n1, n2 = str(n1), str(n2)
 
     open_circuit = _run(desc, domain, omega=omega, params=params,
-                        use_rms=use_rms, suffix=suffix)
+                        use_rms=use_rms, equations=equations,
+                        unknowns=unknowns, conditions=conditions,
+                        suffix=suffix)
     vth = sp.simplify(_v(open_circuit, n1) - _v(open_circuit, n2))
     if vth == 0:
         raise CircuitError(
@@ -75,7 +96,9 @@ def th(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
 
     test_name = "stest"
     short_circuit = _run(f"{desc}:{test_name},{n1},{n2}", domain, omega=omega,
-                          params=params, use_rms=use_rms, suffix=suffix)
+                          params=params, use_rms=use_rms, equations=equations,
+                          unknowns=unknowns, conditions=conditions,
+                          suffix=suffix)
     ino = sp.simplify(short_circuit.i(test_name))
 
     z = sp.simplify(vth / ino)
@@ -89,7 +112,8 @@ def th(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
 
 
 def er(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
-       params: Optional[dict] = None, suffix: str = "ask") -> sp.Expr:
+       params: Optional[dict] = None, equations=None, unknowns=None,
+       conditions=None, suffix: str = "ask") -> sp.Expr:
     """Equivalent resistance (dc) / impedance (ac) of a source-free
     (passive) circuit `desc`, as seen between nodes `n1` and `n2` --
     ports `er()`. Injects a 1A test current source and reads the
@@ -99,7 +123,8 @@ def er(desc: str, n1: str, n2: str, domain: str = "dc", omega=None,
     n1, n2 = str(n1), str(n2)
     test_name = "jtest"
     res = _run(f"{desc}:{test_name},{n2},{n1},1", domain, omega=omega,
-               params=params, suffix=suffix)
+               params=params, equations=equations, unknowns=unknowns,
+               conditions=conditions, suffix=suffix)
     return sp.simplify(_v(res, n1) - _v(res, n2))
 
 
@@ -107,7 +132,8 @@ _PORT_KINDS = ("z", "y", "h", "g", "a", "b")
 
 
 def port(desc: str, n1: str, n2: str, kind: str, domain: str = "dc", omega=None,
-         params: Optional[dict] = None, suffix: str = "ask") -> dict:
+         params: Optional[dict] = None, equations=None, unknowns=None,
+         conditions=None, suffix: str = "ask") -> dict:
     """Extract the z/y/h/g/a/b two-port parameters of the circuit `desc`
     between ports (`n1`, ground) and (`n2`, ground) -- ports `port()`.
     Returns a dict with keys "11", "12", "21", "22".
@@ -158,6 +184,7 @@ def port(desc: str, n1: str, n2: str, kind: str, domain: str = "dc", omega=None,
         i2_of = lambda res: res.i("jtest2")
 
     res = _run(f"{desc}:{test}", domain, omega=omega, params=params,
+               equations=equations, unknowns=unknowns, conditions=conditions,
                suffix=suffix)
     V1, V2 = _v(res, n1), _v(res, n2)
     I1, I2 = i1_of(res), i2_of(res)
