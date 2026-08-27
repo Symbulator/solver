@@ -673,6 +673,40 @@ class _Layout:
             else:
                 self.spanning.append(e)
 
+        # A non-inverting stage's driving source -- a grounded e/j that
+        # is the *only* thing on the op-amp's lower input -- is drawn in
+        # the input drop itself, under the triangle, the way a textbook
+        # draws it. Giving that node a top-row column of its own would
+        # push the source out to the edge of the drawing and route its
+        # wire across everything in between.
+        self.op_src: Dict[str, Element] = {}
+        self.captured: set = set()
+        usage: Dict[str, List[Element]] = {}
+        for e in elements:
+            if e.kind == "m":
+                continue
+            terms = e.fields[:3] if e.kind == "o" else [e.n1, e.n2]
+            for n in set(terms):
+                if n != "0":
+                    usage.setdefault(n, []).append(e)
+        for op in self.opamps:
+            # The input routed downward: n+ normally; when the pins are
+            # flipped because n- is ground (see _op_up), the downward
+            # input *is* ground and there is nothing to capture.
+            dn = op.fields[0] if op.fields[1] != "0" else "0"
+            if dn == "0" or dn == _op_up(op):
+                continue
+            users = usage.get(dn, [])
+            if len(users) != 2 or op not in users:
+                continue
+            src = next((u for u in users
+                        if u.kind in ("e", "j") and "0" in (u.n1, u.n2)),
+                       None)
+            if src is not None and src in self.grounded:
+                self.op_src[op.name] = src
+                self.captured.add(dn)
+                self.grounded.remove(src)
+
         self.node_col: Dict[str, int] = {}
         self.elem_col: Dict[str, int] = {}      # grounded elements
         self.level: Dict[str, int] = {}         # spanning elements
@@ -685,7 +719,8 @@ class _Layout:
             n = e.n2 if e.n1 == "0" else e.n1
             by_node.setdefault(n, []).append(e)
 
-        order = _node_order(self.elements)
+        order = [n for n in _node_order(self.elements)
+                 if n not in self.captured]
         idx = {n: i for i, n in enumerate(order)}
 
         # The columns an op-amp occupies, in node-order index space. A
@@ -954,9 +989,21 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
     # own node row if it is not grounded)
     x_p = x_in - 30 - lane * 16
     cv.wire(tx, y_plus, x_p, y_plus)
-    if dn_node == "0":
-        cv.wire(x_p, y_plus, x_p, lay.y_bot)
+    src = lay.op_src.get(e.name)
+    if src is not None:
+        # The stage's driving source, drawn in the input drop itself:
+        # nothing else touches this input node, so the textbook picture
+        # -- input straight down through the source to ground -- is
+        # available. The node still gets its name, beside the drop.
+        if _ground_node(src) == src.n1:
+            _draw_element(cv, src, x_p, y_plus, x_p, lay.y_bot)
+        else:
+            _draw_element(cv, src, x_p, lay.y_bot, x_p, y_plus)
+        cv.text(x_p + 6, y_plus - 6, dn_node, "start")
         grounded_at: Optional[float] = x_p
+    elif dn_node == "0":
+        cv.wire(x_p, y_plus, x_p, lay.y_bot)
+        grounded_at = x_p
     else:
         grounded_at = None
         xp_node = lay.px(lay.node_col[dn_node])
@@ -1138,6 +1185,8 @@ def draw(desc: str):
 #   to two others with opposite signs cannot be drawn faithfully -- the
 #   dot convention itself has no notation for it. The caption still
 #   shows each M with its sign.
-# * A non-grounded op-amp `+` input is routed, but may cross other wires.
+# * A non-grounded op-amp `+` input is routed just under the node row;
+#   where it crosses another wire the crossing is drawn as a hop, but a
+#   dense multi-amp circuit can still accumulate several hops.
 # * Two-port blocks (z/y/h/g/a/b) and the transformer `t` draw as a
 #   labelled box, without their port parameters.
