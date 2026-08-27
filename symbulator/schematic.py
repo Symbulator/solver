@@ -115,6 +115,15 @@ def _esc(s: str) -> str:
 # number anyone typed: eight or more significant digits.
 _LONG_FLOAT = re.compile(r"\d*\.\d{7,}(?:[eE][+-]?\d+)?")
 
+# `30*pi/180` is how an angle in degrees is written where the solver
+# needs radians; the schematic shows it back as the degrees it means.
+_DEG_RE = re.compile(r"(\d+(?:\.\d+)?)\s*\*\s*pi\s*/\s*180(?![\d.])")
+
+# A value longer than this is not lettered at the element -- the
+# element keeps its name and the value moves to a caption line below
+# the drawing (same block the mutual inductances already use).
+CAPTION_LEN = 16
+
 
 def _round_long_floats(text: str) -> str:
     """`173.20508075688772` -> `173.21`. Only rewrites literals long
@@ -161,6 +170,17 @@ def _pretty(e: Element) -> str:
     val = raw.replace("'", "").strip()
     val = _strip_outer_parens(val)
     val = _round_long_floats(val)
+    val = _DEG_RE.sub("\\1\u00b0", val)
+    # The parallel-impedance shortcut back in the reader's own
+    # notation: `[a,b]` was rewritten to `pr(a,b)` before the fields
+    # were split (raw_fields cannot preserve it -- the bracket's inner
+    # comma makes the typed text split differently), so it is restored
+    # here, innermost first when they nest.
+    while "pr(" in val:
+        swapped = re.sub(r"pr\(([^()]*)\)", r"[\1]", val)
+        if swapped == val:
+            break
+        val = swapped
     eng = _engineering(val)
     if eng is None:
         return val
@@ -500,6 +520,11 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
     # puts the value *below* the circle, where a resistor-height offset
     # would run the text straight through the stroke.
     round_body = e.kind in ("e", "j")
+    val = _pretty(e)
+    if len(val) > CAPTION_LEN:
+        # Too long to letter at the element: the name stays, the value
+        # goes to the caption block below the drawing (see _render).
+        val = ""
     if vertical:
         top, bot = min(y1, y2), max(y1, y2)
         if y1 < y2:
@@ -511,7 +536,7 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
         mx, my = x1, (top + bot) / 2.0
         dx = 20 if round_body else 17
         cv.text(mx + dx, my - 3, e.name, "start")
-        cv.text(mx + dx, my + 12, _pretty(e), "start")
+        cv.text(mx + dx, my + 12, val, "start")
     else:
         left, right = min(x1, x2), max(x1, x2)
         if x1 < x2:
@@ -528,10 +553,9 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
             mx = min(x1, x2) + length / 4.0
         if round_body:
             cv.text(mx, my - 22, e.name)
-            cv.text(mx, my + 28, _pretty(e))
+            cv.text(mx, my + 28, val)
         else:
             cv.text(mx, my - 25, e.name)
-            val = _pretty(e)
             if len(val) * 7.2 > 70:
                 # A long value centred above the body would run into
                 # the neighbouring node's name; below the wire is open.
@@ -1121,23 +1145,34 @@ def _render(elements: List[Element]) -> str:
     for n, col in lay.node_col.items():
         cv.text(lay.px(col) + 6, y_top - 6, n, "start")
 
-    # 7. mutual inductance, written above the drawing rather than drawn
-    #    into it: `m` couples two *elements*, not two nodes, so there is
-    #    no honest place to put it on the circuit itself -- a dashed tie
-    #    between the two coils just reads as another wire.
-    #    The polarity, though, does belong on the circuit: a dot at each
-    #    coupled coil's n1 terminal, which is what the solver's sign
-    #    convention means in schematic notation (see `_coupling_dot`).
+    # 7. the caption block, below the drawing: values too long to
+    #    letter at their element (the element keeps its name, see
+    #    _draw_element), then the mutual inductances -- `m` couples two
+    #    *elements*, not two nodes, so there is no honest place to put
+    #    it on the circuit itself; a dashed tie between the two coils
+    #    just reads as another wire.
+    #    The coupling polarity, though, does belong on the circuit: a
+    #    dot at each coupled coil's n1 terminal, which is what the
+    #    solver's sign convention means in schematic notation (see
+    #    `_coupling_dot`).
     for e in lay.mutuals:
         for coil in (e.n1, e.n2):
             if coil in segs:
                 _coupling_dot(cv, *segs[coil])
-    captions = ["{0} = {1}  (couples {2} and {3})".format(
-        e.name, _pretty(e), e.n1, e.n2) for e in lay.mutuals]
+    captions = []
+    drawn = set(segs) | {src.name for src in lay.op_src.values()}
+    for e in elements:
+        if e.kind == "m" or e.name not in drawn:
+            continue
+        val = _pretty(e)
+        if len(val) > CAPTION_LEN:
+            captions.append("{0} = {1}".format(e.name, val))
+    captions.extend("{0} = {1}  (couples {2} and {3})".format(
+        e.name, _pretty(e), e.n1, e.n2) for e in lay.mutuals)
     if captions:
-        cx, cy = cv.x0, cv.y0 - 14
-        for i, line in enumerate(reversed(captions)):
-            cv.text(cx, cy - i * 17, line, "start")
+        cx, cy = cv.x0, cv.y1 + 26
+        for i, line in enumerate(captions):
+            cv.text(cx, cy + i * 17, line, "start")
 
     # 8. emit the collected wires -- merged, with junction dots at every
     #    T-joint and a semicircular hop wherever two wires cross without

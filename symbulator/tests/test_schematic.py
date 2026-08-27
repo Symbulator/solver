@@ -157,6 +157,36 @@ def test_long_float_literals_are_rounded_for_display():
     assert "173.2" in joined
 
 
+def test_degree_angles_display_in_degrees():
+    """`30*pi/180` is degrees spelt in radians; the label shows the
+    degrees back. Display only -- the solver still gets radians."""
+    svg = to_svg("j,0,2,10*sin(2*t+30*pi/180):r1,2,0,10")
+    joined = " ".join(texts(svg))
+    assert "30°" in joined
+    assert "pi/180" not in joined
+
+
+def test_long_values_move_to_a_caption_below_the_drawing():
+    """A value too long to letter at the element keeps only the name
+    there; `name = value` appears once, below everything else."""
+    import re as _re
+    desc = "e,1,0,12:r1,1,0,4+20j+[16,-14j+25j]"
+    svg = to_svg(desc)
+    labels = [(float(m.group(1)), m.group(2)) for m in _re.finditer(
+        r'<text[^>]*y="([-\d.]+)"[^>]*>([^<]*)</text>', svg)]
+    caption = [y for y, s in labels if s.startswith("r1 = ")]
+    assert len(caption) == 1
+    # below every other label and every wire
+    assert caption[0] > max(y for y, s in labels if not s.startswith("r1 ="))
+    # and the value is not also lettered at the element
+    assert sum(1 for _, s in labels if "[16," in s) == 1
+
+
+def test_short_values_stay_at_the_element():
+    svg = to_svg(DIVIDER)
+    assert not any(" = " in s for s in texts(svg))
+
+
 # --- crossings and junctions -------------------------------------------
 
 def test_unconnected_crossings_are_drawn_as_hops():
