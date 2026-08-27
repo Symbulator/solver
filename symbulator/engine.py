@@ -72,6 +72,16 @@ class Circuit:
         if suffix not in ("ask", "si", "var"):
             raise ValueError("suffix must be 'ask', 'si', or 'var'")
         self.suffix = suffix
+        # Rewritten field -> what the reader typed, for the values where the
+        # two differ. `_value` receives a field's text and nothing else, so
+        # this is how it recovers the original to quote in an error. Only
+        # differing pairs are stored, and a collision is harmless: the two
+        # rewrote to the same thing, so either original describes it.
+        self._typed_form = {}
+        for _el in elements:
+            for _new, _old in zip(_el.fields, getattr(_el, "raw_fields", [])):
+                if _new != _old:
+                    self._typed_form.setdefault(_new, _old)
         self.elements = elements
         self.domain = domain
         # i, I, j and J only mean the imaginary unit in AC, where a
@@ -104,7 +114,8 @@ class Circuit:
         restricted namespace in si_prefix.safe_sympify (so stray letters
         like "Q" become plain symbols, not SymPy internals)."""
         return safe_sympify(expand_value(raw, self.suffix),
-                            reserve_imaginary=self.reserve_imaginary)
+                            reserve_imaginary=self.reserve_imaginary,
+                            original=self._typed_form.get(str(raw), str(raw)))
 
     def v(self, node: str) -> sp.Expr:
         """Return the (symbolic) voltage at `node`, registering it as an
@@ -420,7 +431,8 @@ class Circuit:
         p = self.params.get(e.name)
         if p:
             return tuple(safe_sympify(expand_value(str(p[ij]), self.suffix),
-                                      reserve_imaginary=self.reserve_imaginary)
+                                      reserve_imaginary=self.reserve_imaginary,
+                                      original=str(p[ij]))
                          for ij in ("11", "12", "21", "22"))
         return (_sym(f"{e.name}11"), _sym(f"{e.name}12"),
                 _sym(f"{e.name}21"), _sym(f"{e.name}22"))

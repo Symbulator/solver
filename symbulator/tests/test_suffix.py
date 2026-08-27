@@ -19,6 +19,7 @@ import pytest
 
 from symbulator import dc, find_ambiguous_values, AmbiguousValueError
 from symbulator.elements import parse_circuit
+from symbulator.elements import parse_circuit
 
 
 DIVIDER = "e1,1,0,5:r1,1,2,1k:r2,2,0,1k"
@@ -93,3 +94,45 @@ def test_expand_si_false_still_expands_bracket_shorthand():
     # inner commas apart from an element's own field commas.
     elements = parse_circuit("r1,1,0,[1k,2k]", expand_si=False)
     assert elements[0].value == "pr(1k,2k)"
+
+
+# ---- #59: an error quotes what was typed, not the machine's rewrite ------
+#
+# Values are rewritten before they are parsed -- [a,b] becomes pr(a,b) and
+# 1'k becomes 1*10**3 -- so a complaint used to be about a string the
+# reader never wrote.
+
+def test_unbalanced_bracket_is_named_in_the_readers_own_notation():
+    from symbulator.si_prefix import ShorthandError
+    with pytest.raises(ShorthandError) as caught:
+        parse_circuit("e,1,0,10:r1,1,0,[1'k,2'k")
+    msg = str(caught.value)
+    assert "[1'k,2'k" in msg          # what was typed
+    assert "pr(" not in msg           # not what the rewrite made of it
+    assert "closing bracket" in msg
+
+
+def test_a_name_used_as_a_function_says_so_without_inventing_one():
+    # rx[1'k] rewrites into rxpr(...), so the name SymPy chokes on is one
+    # the reader never typed. It must not appear in the message.
+    from symbulator.elements import CircuitError
+    from symbulator.si_prefix import UnsafeExpressionError
+    with pytest.raises((UnsafeExpressionError, CircuitError)) as caught:
+        dc("e,1,0,10:rx,1,0,rx[1'k]")
+    msg = str(caught.value)
+    assert "rx[1'k]" in msg
+    assert "rxpr" not in msg
+    assert "not callable" not in msg
+
+
+def test_an_unrecognised_prefix_names_the_value():
+    from symbulator.si_prefix import ShorthandError
+    with pytest.raises(ShorthandError) as caught:
+        parse_circuit("e,1,0,10:r1,1,0,1'Q")
+    assert "1'Q" in str(caught.value)
+
+
+def test_the_shorthand_that_is_correct_still_solves():
+    # The guard must not cost the feature it guards.
+    r = dc("e,1,0,10:r1,1,0,[1'k,2'k]")
+    assert r.v("1") == 10

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.14 -- 27 Aug 2026
+
+### Fixed
+- **An error about a value now quotes what was typed, not the machine's
+  rewrite of it (#59).** Values are rewritten before they are parsed:
+  `[a,b]` becomes `pr(a,b)` and `1'k` becomes `1*10**3`. The complaint
+  came from after that, so typing `[1'k,2'k` was answered with
+
+      Could not read the value 'pr(1*10**3,2*10**3': '(' was never closed.
+
+  which is the machine's business and not the reader's. `safe_sympify` and
+  `check_expression_syntax` now take the original text alongside the
+  rewritten one and quote the original; `Element` keeps the fields as they
+  were typed, so the engine can recover them.
+
+  An unbalanced bracket is caught before the rewrite instead, because it
+  cannot be recovered afterwards -- the typed text and the rewrite split
+  into different numbers of fields, so the two can no longer be lined up:
+
+      'r1,1,0,[1'k,2'k' is missing a closing bracket. A parallel
+      combination is written [a,b], as in [1'k,2'k].
+
+- **A name used as a function says so.** `rx[1'k]` has balanced brackets,
+  so it rewrites into something shaped like a call, passes the syntax gate
+  -- which legitimately allows calls -- and died inside SymPy as
+  `'Symbol' object is not callable`, naming neither the value nor the
+  circuit. It now names the value. It deliberately does *not* name the
+  symbol in that case: the rewrite makes `rx[1'k]` into `rxpr(...)`, and
+  the culprit SymPy reports is a name the reader never typed.
+
+- **An unrecognised unit prefix names the value** and lists the prefixes
+  that exist, instead of "Circuit description uses shorthand that
+  Symbulator does not recognize" with nothing to go on.
+
+None of these was ever mis-solved -- every case was refused, and the
+syntax gate is untouched, so this is not a security change.
+
 ## 0.5.13 -- 27 Aug 2026
 
 ### Fixed

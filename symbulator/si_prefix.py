@@ -383,7 +383,29 @@ def expand_shorthand(text: str, si: bool = True) -> str:
     if "\u2220" in result:
         result = expand_angle_notation(result)
 
-    if "[" in result:
+    if "[" in result or "]" in result:
+        # Balance first, and complain in the reader's own notation. The
+        # rewrite below turns [ into pr( , so an unmatched bracket became
+        # an unmatched parenthesis and was reported hundreds of characters
+        # later as "Could not read the value 'pr(1*10**3,2*10**3'" -- the
+        # machine's rewrite of something the reader never wrote. And it
+        # cannot be recovered afterwards: an unbalanced bracket makes the
+        # typed text and the rewrite split into different numbers of
+        # fields, so the two can no longer be lined up.
+        depth = 0
+        for ch in result:
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth < 0:
+                    break
+        if depth:
+            missing = "closing" if depth > 0 else "opening"
+            raise ShorthandError(
+                f"'{text.strip()}' is missing a {missing} bracket. A parallel "
+                f"combination is written [a,b], as in [1'k,2'k]."
+            )
         result = result.replace("[", "pr(").replace("]", ")")
 
     # Only when the value is on its way to being solved. `si=False` means
@@ -405,7 +427,9 @@ def expand_shorthand(text: str, si: bool = True) -> str:
             result = result.replace(old, new)
         if "'" in result:
             raise ShorthandError(
-                "Circuit description uses shorthand that Symbulator does not recognize."
+                f"'{text.strip()}' uses unit shorthand that Symbulator does "
+                f"not recognise. The prefixes are "
+                f"{', '.join(p for p, _ in _SI_PREFIXES)}."
             )
 
     return result
@@ -560,9 +584,15 @@ _PLAIN_NAMES = {
 }
 
 
-def check_expression_syntax(text: str) -> None:
+def check_expression_syntax(text: str, original: str = None) -> None:
     """Refuse `text` unless it is plain arithmetic: numbers, names, the
     operators + - * / ** %, parentheses, and calls of named functions.
+
+    `original` is what the user actually typed, when `text` is a rewrite of
+    it. Values are rewritten before they are parsed -- `[a,b]` becomes
+    `pr(a,b)` and `1'k` becomes `1*10**3` -- so without it a complaint about
+    `[1'k,2'k` came back quoting `pr(1*10**3,2*10**3`, which is the
+    machine's business and not the reader's.
 
     sympify() hands the string to Python's eval, and the restricted
     namespace in `_allowed_namespace` only governs *names* -- Python
@@ -571,11 +601,12 @@ def check_expression_syntax(text: str) -> None:
     syntax tree first makes the namespace trick unnecessary as a
     security boundary; it is what lets the web app accept circuit
     strings from strangers. Raises UnsafeExpressionError."""
+    shown = (original if original is not None else text).strip()
     try:
         tree = ast.parse(text.strip(), mode="eval")
     except SyntaxError as exc:
         raise UnsafeExpressionError(
-            f"Could not read the value '{text.strip()}': {exc.msg}.") from None
+            f"Could not read the value '{shown}': {exc.msg}.") from None
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.Expression, ast.Load)):
@@ -603,24 +634,68 @@ def check_expression_syntax(text: str) -> None:
         else:
             bad = _PLAIN_NAMES.get(type(node).__name__, "something")
         raise UnsafeExpressionError(
-            f"The value '{text.strip()}' contains {bad}, which is not arithmetic. "
+            f"The value '{shown}' contains {bad}, which is not arithmetic. "
             "Values may use numbers, symbols, + - * / ** and function calls "
             "such as sqrt(2) or exp(-3)."
         )
 
 
-def safe_sympify(text: str, reserve_imaginary: bool = True):
+def _names_called(text: str, ns: dict) -> list:
+    """Names used as functions in `text` that are only symbols.
+
+    `rx[1'k]` rewrites into something shaped like a call, which the syntax
+    gate allows -- calls of named functions are legitimate -- so it reaches
+    SymPy and dies there as "'Symbol' object is not callable", a message
+    that names neither the circuit nor the value nor the culprit.
+    """
+    import sympy as sp
+    try:
+        tree = ast.parse(text.strip(), mode="eval")
+    except SyntaxError:
+        return []
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            name = node.func.id
+            if isinstance(ns.get(name), sp.Symbol) and name not in out:
+                out.append(name)
+    return out
+
+
+def safe_sympify(text: str, reserve_imaginary: bool = True,
+                 original: str = None):
     """sympify() restricted to the namespace above: every identifier that
     isn't an intended constant or function becomes a plain Symbol.
 
     `reserve_imaginary` (default true, for backward compatibility with
     every caller that isn't domain-aware) controls whether i/I/j/J parse
     as the imaginary unit or as ordinary symbols -- pass false for any
-    analysis where complex values don't apply (dc, fd, tr)."""
+    analysis where complex values don't apply (dc, fd, tr).
+
+    `original` is what the user typed, when `text` is a rewrite of it --
+    see check_expression_syntax."""
     import sympy as sp
 
-    check_expression_syntax(text)
+    check_expression_syntax(text, original)
     ns = _allowed_namespace(reserve_imaginary)
     for name in set(_IDENT_RE.findall(text)):
         ns.setdefault(name, sp.Symbol(name))
-    return sp.sympify(text, locals=ns)
+    try:
+        return sp.sympify(text, locals=ns)
+    except TypeError as exc:
+        if "not callable" not in str(exc):
+            raise
+        shown = (original if original is not None else text).strip()
+        called = _names_called(text, ns)
+        rewritten = original is not None and original.strip() != text.strip()
+        # Name the culprit only when the text was not rewritten -- after a
+        # rewrite the name SymPy chokes on is one the reader never typed.
+        who = (f"'{called[0]}' is a name, not a function, and it is being "
+               f"used as one"
+               if called and not rewritten
+               else "a name is being used as a function")
+        raise UnsafeExpressionError(
+            f"Could not read the value '{shown}': {who}. Square brackets "
+            f"straight after a name read that way -- a parallel combination "
+            f"stands on its own, as in [1'k,2'k]."
+        ) from None

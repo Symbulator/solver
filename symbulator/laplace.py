@@ -61,7 +61,8 @@ def _read(expr) -> sp.Expr:
     if isinstance(expr, str):
         from .si_prefix import expand_value, safe_sympify
 
-        return safe_sympify(expand_value(expr), reserve_imaginary=False)
+        return safe_sympify(expand_value(expr), reserve_imaginary=False,
+                            original=str(expr))
     return sp.sympify(expr)
 
 
@@ -209,7 +210,8 @@ def _source_to_s(value: str, elements, s: sp.Symbol = S) -> str:
         # `i*delta(t)` means i amperes of impulse, not the unit. And
         # through the ordinary shorthand, or `u(t)` is still an undefined
         # function and the transform quietly declines it.
-        expr = safe_sympify(expand_value(value), reserve_imaginary=False)
+        expr = safe_sympify(expand_value(value), reserve_imaginary=False,
+                            original=str(value))
     except Exception:                                         # noqa: BLE001
         return value          # not an expression we can read; leave it
 
@@ -293,8 +295,10 @@ def _relation_to_s(text: str, elements, s: sp.Symbol = S) -> str:
         return text
     lhs_text, rhs_text = str(text).split("=", 1)
     try:
-        lhs = safe_sympify(expand_value(lhs_text), reserve_imaginary=False)
-        rhs = safe_sympify(expand_value(rhs_text), reserve_imaginary=False)
+        lhs = safe_sympify(expand_value(lhs_text), reserve_imaginary=False,
+                           original=lhs_text)
+        rhs = safe_sympify(expand_value(rhs_text), reserve_imaginary=False,
+                           original=rhs_text)
     except Exception:                                         # noqa: BLE001
         return text
 

@@ -87,6 +87,11 @@ class Element:
     name: str            # full element name, e.g. "r1"
     kind: str             # first letter of name, e.g. "r"
     fields: List[str] = field(default_factory=list)  # fields after the name
+    #: The same fields as the reader typed them, before `[a,b]` became
+    #: `pr(a,b)` and `1'k` became `1*10**3`. Kept only so that a value the
+    #: parser cannot read can be quoted back the way it was written; empty
+    #: when nothing was rewritten. See engine's `_value`.
+    raw_fields: List[str] = field(default_factory=list)
 
     @property
     def n1(self) -> str:
@@ -196,8 +201,10 @@ def parse_circuit(desc: str, expand_si: bool = True) -> List[Element]:
     seen_names = set()
 
     for raw in raw_elements:
+        typed = raw
         raw = expand_shorthand(raw, si=expand_si)
         parts = _split_fields(raw)
+        typed_parts = _split_fields(typed) if typed != raw else parts
         if not parts or parts[0] == "":
             raise CircuitError(f"Malformed element description: '{raw}'.")
 
@@ -239,7 +246,14 @@ def parse_circuit(desc: str, expand_si: bool = True) -> List[Element]:
             if idx < len(fields):
                 fields[idx] = fields[idx].lower()
 
-        elements.append(Element(name=name, kind=kind, fields=fields))
+        # Only when the rewrite actually changed something, and only when
+        # it split the same way -- a mismatch means the two cannot be lined
+        # up field by field, and a wrong original is worse than none.
+        raw_fields = (list(typed_parts[1:])
+                      if typed != raw and len(typed_parts) == len(parts)
+                      else [])
+        elements.append(Element(name=name, kind=kind, fields=fields,
+                                raw_fields=raw_fields))
 
     _validate_topology(elements)
     return elements
