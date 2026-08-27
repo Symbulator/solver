@@ -930,6 +930,9 @@ class _Layout:
             self.level[e.name] = lvl
             placed.append((lo, hi, lvl))
         self.max_level = max(self.level.values(), default=0)
+        # What actually occupies the node row, for gap_free below.
+        self.row0 = [(lo, hi) for lo, hi, l in placed
+                     if l == 0 and hi > lo]
 
         # Op-amps all sit in one horizontal band, so two whose
         # input-to-output columns overlap would be drawn through each
@@ -952,6 +955,12 @@ class _Layout:
             self.op_lane[e.name] = lane
             taken.append((lo, hi, lane))
         self.max_op_lane = max(self.op_lane.values(), default=0)
+
+    def gap_free(self, c: int) -> bool:
+        """True when the node row between column c and column c+1
+        carries nothing -- no element, no stub -- so a wire may run
+        along it and join a node at its own corner."""
+        return not any(lo <= c < hi for lo, hi in self.row0)
 
     # pixel helpers
     def px(self, col: int) -> float:
@@ -1049,13 +1058,22 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
         grounded_at = x_p
     else:
         grounded_at = None
-        # 16px below the node row: far enough under a row-0 element's
-        # body (zigzags reach 9px down) that the parallel run reads as
-        # a separate wire rather than a graze.
         xp_node = lay.px(lay.node_col[dn_node])
-        cv.wire(x_p, y_plus, x_p, lay.y_top + 16)
-        cv.wire(x_p, lay.y_top + 16, xp_node, lay.y_top + 16)
-        cv.wire(xp_node, lay.y_top + 16, xp_node, lay.y_top)
+        dn_col, up_col = lay.node_col[dn_node], lay.node_col.get(up_node)
+        if up_col is not None and dn_col == up_col - 1 \
+                and lay.gap_free(dn_col):
+            # The column to the left is the input's own node and the
+            # row between them is empty: rise to the node row and join
+            # the node at its corner -- one junction point, no tee.
+            cv.wire(x_p, y_plus, x_p, lay.y_top)
+            cv.wire(x_p, lay.y_top, xp_node, lay.y_top)
+        else:
+            # 16px below the node row: far enough under a row-0
+            # element's body (zigzags reach 9px down) that the parallel
+            # run reads as a separate wire rather than a graze.
+            cv.wire(x_p, y_plus, x_p, lay.y_top + 16)
+            cv.wire(x_p, lay.y_top + 16, xp_node, lay.y_top + 16)
+            cv.wire(xp_node, lay.y_top + 16, xp_node, lay.y_top)
     # output: up to its node on the top row. When the output node's
     # column is not comfortably right of the triangle -- above all the
     # follower written `o1,1,2,2`, whose output *is* its inverting
@@ -1063,13 +1081,25 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
     # the wire loops over the top instead: out of the tip, up past the
     # inverting lead, and back to the column it belongs to.
     tip = tx + w
+    out_col = lay.node_col.get(n_out)
     if not loop:
         cv.wire(tip, mid, x_out, mid)
         cv.wire(x_out, mid, x_out, lay.y_top)
+    elif abs(x_out - x_in) < 0.5 and out_col is not None \
+            and lay.gap_free(out_col):
+        # Nothing on the node row to the right of the output node: the
+        # loop climbs all the way and joins the node at its own
+        # corner, so the corner's junction dot is the only dot.
+        xl = tip + 16
+        cv.wire(tip, mid, xl, mid)
+        cv.wire(xl, mid, xl, lay.y_top)
+        cv.wire(xl, lay.y_top, x_out, lay.y_top)
     else:
-        # 12px above the triangle's top vertex -- measured from the
-        # body, not the inverting lead, or the wire grazes the corner.
-        xl, yl = tip + 14, mid - h / 2 - 12
+        # The row is occupied: join the input riser just above the
+        # triangle instead -- 12px above the top vertex, measured from
+        # the body, not the inverting lead, or the wire grazes the
+        # corner.
+        xl, yl = tip + 16, mid - h / 2 - 12
         cv.wire(tip, mid, xl, mid)
         cv.wire(xl, mid, xl, yl)
         cv.wire(xl, yl, x_out, yl)
