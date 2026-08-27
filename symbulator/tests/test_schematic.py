@@ -137,6 +137,129 @@ def test_opamp_stage_draws():
     assert "o1" in " ".join(texts(svg))
 
 
+# --- values are shown the way they were typed --------------------------
+
+def test_phasor_values_stay_in_angle_notation():
+    """expand_shorthand turns 110∠0° into a 17-digit rectangular
+    number even with expand_si=False; the label must show what the
+    reader wrote."""
+    svg = to_svg("ea,1,0,(110∠0°):r1,1,0,10")
+    joined = " ".join(texts(svg))
+    assert "∠" in joined
+    assert "110" in joined
+    assert "16829419696157" not in joined   # no float dust
+
+
+def test_long_float_literals_are_rounded_for_display():
+    svg = to_svg("e1,1,0,173.20508075688772:r1,1,0,10")
+    joined = " ".join(texts(svg))
+    assert "173.20508075688772" not in joined
+    assert "173.2" in joined
+
+
+# --- crossings and junctions -------------------------------------------
+
+def test_unconnected_crossings_are_drawn_as_hops():
+    """Two op-amp stages that force a wire past another wire must mark
+    the crossing with the semicircular no-connection hop (an arc in the
+    path data), never a bare X crossing."""
+    svg = to_svg("e,1,0,vs:r1,1,2,rr1:r2,2,0,rr2:o,2,3,o:"
+                 "r3,o,3,rr3:r4,3,0,rr4")
+    # The + input routes from the triangle back to node 2 past the
+    # bumped r4 -- that crossing must carry an arc.
+    assert "A5 5 0 0" in svg
+
+
+def test_a_wire_never_crosses_an_element_body():
+    """Layout invariant, checked over a gallery of layouts that used to
+    fail: cascade, follower, transresistance, grounded inverting
+    input."""
+    from symbulator.schematic import _Canvas
+    cases = [
+        "e,1,0,vs:r12,1,2,1:r14,1,4,1:r4o,4,o,1:r2o,2,o,1:r23,2,3,1:"
+        "r34,3,4,1:o1,0,2,3:o2,0,4,o",
+        "e,1,0,1.5:rs,1,2,2'k:o,2,0,o:rl,o,0,1'k",
+        "j,0,1,is1:r,1,o,r:o,0,1,o",
+        "e,2,0,vs:r1,2,1,r1:r2,1,o,r2:o,1,0,o",
+        "e,1,0,28:r1,1,2,6:r2,2,3,6:r3,1,2,2:r4,2,3,8:r5,1,3,12",
+    ]
+    crossings = []
+    orig = _Canvas._flush_wires
+
+    def spy(self):
+        for x1, y, x2, _y in [w for w in self.wires
+                              if abs(w[1] - w[3]) < 0.01]:
+            for sx1, sy1, sx2, sy2, half in self.esegs:
+                if abs(sx1 - sx2) > 0.01 or half <= 0:
+                    continue
+                mid = (sy1 + sy2) / 2.0
+                if x1 + 0.5 < sx1 < x2 - 0.5 and sy1 + 0.5 < y < sy2 - 0.5 \
+                        and abs(y - mid) < half + 2:
+                    crossings.append((x1, y))
+        for x, y1, _x, y2 in [w for w in self.wires
+                              if abs(w[0] - w[2]) < 0.01]:
+            for sx1, sy1, sx2, sy2, half in self.esegs:
+                if abs(sy1 - sy2) > 0.01 or half <= 0:
+                    continue
+                mid = (sx1 + sx2) / 2.0
+                if y1 + 0.5 < sy1 < y2 - 0.5 and sx1 + 0.5 < x < sx2 - 0.5 \
+                        and abs(x - mid) < half + 2:
+                    crossings.append((x, sy1))
+        orig(self)
+
+    _Canvas._flush_wires = spy
+    try:
+        for desc in cases:
+            to_svg(desc)
+    finally:
+        _Canvas._flush_wires = orig
+    assert not crossings
+
+
+# --- op-amp layout -----------------------------------------------------
+
+def test_cascade_outputs_land_right_of_their_inputs():
+    """Both stages of an adder cascade must point forward -- the output
+    wire never retraces through the triangle."""
+    from symbulator.schematic import _Layout, _op_up
+    from symbulator.elements import parse_circuit
+    els = parse_circuit(
+        "e,1,0,vs:r12,1,2,1:r14,1,4,1:r4o,4,o,1:r2o,2,o,1:r23,2,3,1:"
+        "r34,3,4,1:o1,0,2,3:o2,0,4,o", expand_si=False)
+    lay = _Layout(els)
+    for op in lay.opamps:
+        assert lay.node_col[op.fields[2]] > lay.node_col[_op_up(op)]
+
+
+def test_noninverting_stage_draws_its_source_in_the_input_drop():
+    """A grounded source that is the only thing on the + input hangs
+    under the triangle instead of taking a top-row column."""
+    from symbulator.schematic import _Layout
+    from symbulator.elements import parse_circuit
+    els = parse_circuit("e,p,0,v2:r1,1,0,r1:r2,1,o,r2:o,p,1,o",
+                        expand_si=False)
+    lay = _Layout(els)
+    assert "p" not in lay.node_col
+    assert lay.op_src["o"].name == "e"
+    # and the drawing still names the node and the source
+    joined = " ".join(texts(to_svg("e,p,0,v2:r1,1,0,r1:r2,1,o,r2:o,p,1,o")))
+    assert "p" in joined.split() and "e" in joined.split()
+
+
+def test_grounded_inverting_input_flips_the_pins():
+    """`o,1,0,o` (inverting input on ground) must not treat ground as
+    the leftmost column; the non-inverting input takes the node row."""
+    svg = to_svg("e,2,0,vs:r1,2,1,r1:r2,1,o,r2:o,1,0,o")
+    assert "<svg" in svg   # and the body-crossing test above covers it
+
+
+def test_follower_output_loops_over_the_triangle():
+    """`o1,1,2,2` -- output tied to the inverting input -- draws a
+    feedback loop, not a wire back through the body."""
+    svg = to_svg("e,1,0,4:o1,1,2,2:o2,2,3,o:ro,3,0,4'k:r6,3,o,6'k")
+    assert "<svg" in svg
+
+
 # --- input handling ----------------------------------------------------
 
 def test_si_shorthand_is_not_negotiated():

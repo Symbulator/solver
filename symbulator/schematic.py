@@ -521,6 +521,11 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
         cv.raw('<g transform="{0}">{1}</g>'.format(tf, body),
                (left, y1 - 22), (right, y1 + 22))
         mx, my = (x1 + x2) / 2.0, y1
+        if e.kind == "s" and length > COL_W * 1.5:
+            # A long short is a plain wire whose midpoint is exactly
+            # where another element's riser tends to cross it (shorts
+            # jumper over things by nature); label it off-centre.
+            mx = min(x1, x2) + length / 4.0
         if round_body:
             cv.text(mx, my - 22, e.name)
             cv.text(mx, my + 28, _pretty(e))
