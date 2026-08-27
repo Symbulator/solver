@@ -1088,19 +1088,22 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
     elif abs(x_out - x_in) < 0.5 and out_col is not None \
             and lay.gap_free(out_col):
         # Nothing on the node row to the right of the output node: the
-        # feedback springs straight up from the tip corner -- one bend
-        # -- and joins the node at its own corner, so the corner's
+        # feedback leaves the tip the way the triangle points, turns
+        # up, and joins the node at its own corner, so the corner's
         # junction dot is the only dot.
-        cv.wire(tip, mid, tip, lay.y_top)
-        cv.wire(tip, lay.y_top, x_out, lay.y_top)
+        xl = tip + 16
+        cv.wire(tip, mid, xl, mid)
+        cv.wire(xl, mid, xl, lay.y_top)
+        cv.wire(xl, lay.y_top, x_out, lay.y_top)
     else:
-        # The row is occupied: up from the tip, and join the input
+        # The row is occupied: out of the tip, up, and join the input
         # riser just above the triangle instead -- 12px above the top
         # vertex, measured from the body, not the inverting lead, or
         # the wire grazes the corner.
-        yl = mid - h / 2 - 12
-        cv.wire(tip, mid, tip, yl)
-        cv.wire(tip, yl, x_out, yl)
+        xl, yl = tip + 16, mid - h / 2 - 12
+        cv.wire(tip, mid, xl, mid)
+        cv.wire(xl, mid, xl, yl)
+        cv.wire(xl, yl, x_out, yl)
         if abs(x_out - x_in) < 0.5:
             # Joins the inverting input's own riser: a real junction.
             cv.dot(x_out, yl)
