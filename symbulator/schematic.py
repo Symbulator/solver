@@ -252,6 +252,11 @@ class _Canvas:
         # (Crossing the body itself is a layout failure the column and
         # level assignment is responsible for preventing.)
         self.esegs: List[Tuple[float, float, float, float]] = []
+        # Solid regions no wire may enter (op-amp triangle bodies):
+        # nothing routes around them at draw time -- the layout is
+        # responsible for never sending a wire there -- but keeping
+        # them lets a verification harness prove that it didn't.
+        self.obstacles: List[Tuple[float, float, float, float]] = []
         self.dots: List[Tuple[float, float]] = []
 
     def _bound(self, *pts: Tuple[float, float]) -> None:
@@ -274,6 +279,9 @@ class _Canvas:
         crossed, with a hop)."""
         self.esegs.append((min(x1, x2), min(y1, y2),
                            max(x1, x2), max(y1, y2), half))
+
+    def obstacle(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        self.obstacles.append((x0, y0, x1, y1))
 
     def dot(self, x: float, y: float) -> None:
         self._bound((x, y))
@@ -1001,9 +1009,15 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
     cv.raw('<path d="M{0:g} {1:g} L{0:g} {2:g} L{3:g} {4:g} Z" fill="none"/>'
            .format(tx, mid - h / 2, mid + h / 2, tx + w, mid),
            (tx, mid - h / 2), (tx + w, mid + h / 2))
+    cv.obstacle(tx, mid - h / 2, tx + w, mid + h / 2)
     cv.text(tx + 13, y_minus + 5, up_sign, "middle")
     cv.text(tx + 13, y_plus + 5, dn_sign, "middle")
-    cv.text(tx + w / 2, mid - h / 2 - 8, e.name)
+    # The feedback loop drawn when the output cannot go right (below)
+    # passes over the triangle's top, where the name normally sits, so
+    # the name yields the spot and moves under the body instead.
+    loop = x_out < tx + w + 12
+    cv.text(tx + w / 2,
+            mid + h / 2 + 16 if loop else mid - h / 2 - 8, e.name)
 
     # upper input: straight down from its node, then in
     cv.wire(x_in, lay.y_top, x_in, y_minus)
@@ -1035,10 +1049,13 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
         grounded_at = x_p
     else:
         grounded_at = None
+        # 16px below the node row: far enough under a row-0 element's
+        # body (zigzags reach 9px down) that the parallel run reads as
+        # a separate wire rather than a graze.
         xp_node = lay.px(lay.node_col[dn_node])
-        cv.wire(x_p, y_plus, x_p, lay.y_top + 12)
-        cv.wire(x_p, lay.y_top + 12, xp_node, lay.y_top + 12)
-        cv.wire(xp_node, lay.y_top + 12, xp_node, lay.y_top)
+        cv.wire(x_p, y_plus, x_p, lay.y_top + 16)
+        cv.wire(x_p, lay.y_top + 16, xp_node, lay.y_top + 16)
+        cv.wire(xp_node, lay.y_top + 16, xp_node, lay.y_top)
     # output: up to its node on the top row. When the output node's
     # column is not comfortably right of the triangle -- above all the
     # follower written `o1,1,2,2`, whose output *is* its inverting
@@ -1046,11 +1063,13 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
     # the wire loops over the top instead: out of the tip, up past the
     # inverting lead, and back to the column it belongs to.
     tip = tx + w
-    if x_out >= tip + 12:
+    if not loop:
         cv.wire(tip, mid, x_out, mid)
         cv.wire(x_out, mid, x_out, lay.y_top)
     else:
-        xl, yl = tip + 14, y_minus - 16
+        # 12px above the triangle's top vertex -- measured from the
+        # body, not the inverting lead, or the wire grazes the corner.
+        xl, yl = tip + 14, mid - h / 2 - 12
         cv.wire(tip, mid, xl, mid)
         cv.wire(xl, mid, xl, yl)
         cv.wire(xl, yl, x_out, yl)

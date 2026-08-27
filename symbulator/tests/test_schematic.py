@@ -290,6 +290,32 @@ def test_follower_output_loops_over_the_triangle():
     assert "<svg" in svg
 
 
+def test_no_wire_grazes_an_opamp_triangle():
+    """Bo2's Figure 6.23: the feedback loop used to run 1.5px above
+    the triangle's top vertex -- visually touching its corner. Every
+    wire must clear the triangle by a margin, except the three pin
+    connections on its faces."""
+    import re as _re
+    svg = to_svg("e,3,0,1:r1,3,1,1:r2,1,2,1:ca,2,0,1/5,0:cb,1,o,1,0:o,2,o,o")
+    tri = _re.search(r'<path d="M([\d.]+) ([\d.]+) L\1 ([\d.]+) '
+                     r'L([\d.]+) ([\d.]+) Z"', svg)
+    assert tri, "no triangle found"
+    ox0, oy0, oy1, ox1 = (float(tri.group(1)), float(tri.group(2)),
+                          float(tri.group(3)), float(tri.group(4)))
+    for m in _re.finditer(r'<line x1="([-\d.]+)" y1="([-\d.]+)" '
+                          r'x2="([-\d.]+)" y2="([-\d.]+)"', svg):
+        x1, y1, x2, y2 = (float(m.group(i)) for i in (1, 2, 3, 4))
+        if abs(y1 - y2) < 0.01:      # horizontal
+            if x2 - 1 < ox0 or x1 + 1 > ox1:
+                continue             # entirely left/right, or a pin stub
+            assert not (oy0 - 4 < y1 < oy1 + 4), (
+                "horizontal wire at y=%g grazes the triangle" % y1)
+        else:                        # vertical
+            if oy0 - 4 < max(y1, y2) and min(y1, y2) < oy1 + 4:
+                assert not (ox0 - 4 < x1 < ox1 + 4), (
+                    "vertical wire at x=%g grazes the triangle" % x1)
+
+
 # --- input handling ----------------------------------------------------
 
 def test_si_shorthand_is_not_negotiated():
