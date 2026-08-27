@@ -122,7 +122,9 @@ def test_an_element_spanning_an_intermediate_node_is_lifted():
     """A bridge draws as a ladder with a jumper over the top -- a
     documented limitation, and the reason the stacking exists at all."""
     svg = to_svg("e1,1,0,5:r1,1,2,1:r2,2,0,1:r3,1,0,1")
-    assert svg.count("<line") > 4
+    # Wires are merged where collinear, so count strokes of any kind:
+    # the lifted branch still needs risers beyond a flat ladder's wiring.
+    assert svg.count("<line") + svg.count("<path") > 6
 
 
 def test_a_chain_comes_out_as_a_chain():

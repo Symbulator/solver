@@ -111,29 +111,128 @@ def _esc(s: str) -> str:
              .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+# A float literal long enough to be floating-point dust rather than a
+# number anyone typed: eight or more significant digits.
+_LONG_FLOAT = re.compile(r"\d*\.\d{7,}(?:[eE][+-]?\d+)?")
+
+
+def _round_long_floats(text: str) -> str:
+    """`173.20508075688772` -> `173.21`. Only rewrites literals long
+    enough that no one wrote them by hand -- they are the residue of an
+    expansion (a phasor turned rectangular, a computed coefficient) and
+    carry no five-decimal information a schematic reader could use."""
+    def shorten(m):
+        try:
+            return "{0:.5g}".format(float(m.group(0)))
+        except (ValueError, OverflowError):
+            return m.group(0)
+    return _LONG_FLOAT.sub(shorten, text)
+
+
+def _strip_outer_parens(text: str) -> str:
+    """Drop redundant enclosing parentheses: `((110∠0°))` -> `110∠0°`.
+    Only when the outermost pair actually matches around the whole
+    string, so `(a)+(b)` keeps its parens."""
+    while len(text) >= 2 and text[0] == "(" and text[-1] == ")":
+        depth = 0
+        for i, ch in enumerate(text):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and i < len(text) - 1:
+                    return text
+        text = text[1:-1].strip()
+    return text
+
+
 def _pretty(e: Element) -> str:
-    """Label text for an element value: the SI-prefix quote is dropped
-    (1'k -> 1k) and a unit appended when the value is a bare number
-    rather than a symbol."""
+    """Label text for an element value: shown the way the reader typed
+    it (raw_fields survives shorthand expansion -- a phasor stays
+    `110∠0°` instead of its 17-digit rectangular expansion), with the
+    SI-prefix quote dropped (1'k -> 1k), redundant outer parentheses
+    removed, long float literals rounded, and a unit appended when the
+    value is a bare number rather than a symbol."""
     raw = e.value
     if raw is None:
         return ""
+    if e.raw_fields and len(e.raw_fields) > 2:
+        raw = e.raw_fields[2]
     val = raw.replace("'", "").strip()
+    val = _strip_outer_parens(val)
+    val = _round_long_floats(val)
     eng = _engineering(val)
     if eng is None:
         return val
     return eng + _UNIT.get(e.kind, "")
 
 
+HOP_R = 5.0    # radius of the semicircular hop where one wire crosses another
+_EPS = 0.5
+
+
+def _hop_path(a: float, b: float, c: float, pts: List[float],
+              horizontal: bool) -> str:
+    """One wire from a to b (at cross-coordinate c) with a semicircular
+    hop at each of `pts` -- the standard notation for a crossing that
+    is not a connection. Plain wires stay `<line>` elements."""
+    # A hop too close to the wire's end (or to the previous hop) has no
+    # room for its arc; drop it rather than draw a mangled bump.
+    usable: List[float] = []
+    for p in pts:
+        if p - HOP_R < a + 1 or p + HOP_R > b - 1:
+            continue
+        if usable and p - HOP_R < usable[-1] + HOP_R + 1:
+            continue
+        usable.append(p)
+    if not usable:
+        if horizontal:
+            return ('<line x1="{0:g}" y1="{1:g}" x2="{2:g}" y2="{1:g}"/>'
+                    .format(a, c, b))
+        return ('<line x1="{0:g}" y1="{1:g}" x2="{0:g}" y2="{2:g}"/>'
+                .format(c, a, b))
+    d: List[str] = []
+    if horizontal:
+        d.append("M{0:g} {1:g}".format(a, c))
+        for p in usable:
+            d.append("L{0:g} {1:g}".format(p - HOP_R, c))
+            d.append("A{0:g} {0:g} 0 0 1 {1:g} {2:g}".format(
+                HOP_R, p + HOP_R, c))
+        d.append("L{0:g} {1:g}".format(b, c))
+    else:
+        d.append("M{0:g} {1:g}".format(c, a))
+        for p in usable:
+            d.append("L{0:g} {1:g}".format(c, p - HOP_R))
+            d.append("A{0:g} {0:g} 0 0 0 {1:g} {2:g}".format(
+                HOP_R, c, p + HOP_R))
+        d.append("L{0:g} {1:g}".format(c, b))
+    return '<path d="{0}"/>'.format(" ".join(d))
+
+
 class _Canvas:
     """Collects SVG fragments and tracks the bounding box, so the
     viewBox is computed from what was actually drawn rather than
-    predicted up front."""
+    predicted up front.
+
+    Wires and junction dots are *collected* rather than emitted: at
+    flush time every horizontal-vertical crossing that is interior to
+    both wires -- a place two unconnected wires pass each other -- is
+    drawn as a small semicircular hop on the horizontal wire, the
+    standard no-connection notation, and every endpoint that lands on
+    the interior of a perpendicular wire gets a junction dot, so a
+    T-connection and a crossing can never be confused."""
 
     def __init__(self) -> None:
         self.parts: List[str] = []
         self.x0 = self.y0 = 1e9
         self.x1 = self.y1 = -1e9
+        self.wires: List[Tuple[float, float, float, float]] = []
+        # Element segments: the axis line an element body sits on, kept
+        # so a wire crossing an element's *lead* still gets its hop.
+        # (Crossing the body itself is a layout failure the column and
+        # level assignment is responsible for preventing.)
+        self.esegs: List[Tuple[float, float, float, float]] = []
+        self.dots: List[Tuple[float, float]] = []
 
     def _bound(self, *pts: Tuple[float, float]) -> None:
         for x, y in pts:
@@ -144,20 +243,107 @@ class _Canvas:
         if abs(x1 - x2) < 0.01 and abs(y1 - y2) < 0.01:
             return
         self._bound((x1, y1), (x2, y2))
-        self.parts.append(
-            '<line x1="{0:g}" y1="{1:g}" x2="{2:g}" y2="{3:g}"/>'
-            .format(x1, y1, x2, y2))
+        self.wires.append((min(x1, x2), min(y1, y2),
+                           max(x1, x2), max(y1, y2)))
+
+    def eseg(self, x1: float, y1: float, x2: float, y2: float,
+             half: float = 23.0) -> None:
+        """Register an element's axis segment. `half` is the body's
+        half-length along the axis, centred on the midpoint -- the zone
+        a wire must never cross (the leads either side of it may be
+        crossed, with a hop)."""
+        self.esegs.append((min(x1, x2), min(y1, y2),
+                           max(x1, x2), max(y1, y2), half))
 
     def dot(self, x: float, y: float) -> None:
         self._bound((x, y))
-        self.parts.append(
-            '<circle cx="{0:g}" cy="{1:g}" r="{2:g}" fill="currentColor" '
-            'stroke="none"/>'.format(x, y, DOT_R))
+        self.dots.append((x, y))
+
+    def _flush_wires(self) -> None:
+        """Emit the collected wires: merged where collinear runs
+        overlap, with a hop wherever one wire crosses another (or an
+        element's lead) without connecting, and a junction dot wherever
+        a wire or element endpoint tees into a passing wire."""
+        hor = [w for w in self.wires if abs(w[1] - w[3]) < 0.01]
+        ver = [w for w in self.wires if abs(w[0] - w[2]) < 0.01]
+        eh = [s for s in self.esegs if abs(s[1] - s[3]) < 0.01]
+        ev = [s for s in self.esegs if abs(s[0] - s[2]) < 0.01]
+
+        def merge(runs, key_i, lo_i, hi_i):
+            """Overlapping collinear runs (double-drawn risers) as one."""
+            merged: List[List[float]] = []
+            for r in sorted(runs, key=lambda r: (r[key_i], r[lo_i])):
+                for m in merged:
+                    if abs(m[key_i] - r[key_i]) < 0.01 \
+                            and r[lo_i] <= m[hi_i] + 0.01 \
+                            and m[lo_i] <= r[hi_i] + 0.01:
+                        m[lo_i] = min(m[lo_i], r[lo_i])
+                        m[hi_i] = max(m[hi_i], r[hi_i])
+                        break
+                else:
+                    merged.append(list(r))
+            return [tuple(m) for m in merged]
+
+        hor = merge(hor, 1, 0, 2)
+        ver = merge(ver, 0, 1, 3)
+
+        # Junction dots at T-joints: an endpoint on the interior of a
+        # perpendicular wire is a connection, and drawing its dot is
+        # what lets the hops below carry the opposite meaning.
+        for xa, ya, xb, yb in [w[:4] for w in hor] + [s[:4] for s in eh]:
+            for x, y1, _, y2 in ver:
+                for px_ in (xa, xb):
+                    if abs(px_ - x) < _EPS and y1 + _EPS < ya < y2 - _EPS:
+                        self.dot(px_, ya)
+        for x, ya, _, yb in [w[:4] for w in ver] + [s[:4] for s in ev]:
+            for x1, y, x2, _ in hor:
+                for py in (ya, yb):
+                    if abs(py - y) < _EPS and x1 + _EPS < x < x2 - _EPS:
+                        self.dot(x, py)
+
+        # Hops: the horizontal wire jumps over vertical wires and
+        # vertical element leads; a vertical wire only ever needs to
+        # jump where a horizontal *element* is in its way, since
+        # wire-wire crossings already got their hop on the horizontal.
+        for x1, y, x2, _y in hor:
+            pts = sorted(
+                x for x, ya, _, yb in [w[:4] for w in ver]
+                + [s[:4] for s in ev]
+                if x1 + _EPS < x < x2 - _EPS and ya + _EPS < y < yb - _EPS)
+            self.parts.append(_hop_path(x1, x2, y, pts, horizontal=True))
+        for x, y1, _x, y2 in ver:
+            pts = sorted(
+                y for xa, y, xb, _ in [s[:4] for s in eh]
+                if y1 + _EPS < y < y2 - _EPS and xa + _EPS < x < xb - _EPS)
+            self.parts.append(_hop_path(y1, y2, x, pts, horizontal=False))
+
+        seen = set()
+        for x, y in self.dots:
+            key = (round(x), round(y))
+            if key not in seen:
+                seen.add(key)
+                self.parts.append(
+                    '<circle cx="{0:g}" cy="{1:g}" r="{2:g}" '
+                    'fill="currentColor" stroke="none"/>'
+                    .format(x, y, DOT_R))
+
+    def flush(self) -> None:
+        self._flush_wires()
 
     def text(self, x: float, y: float, s: str, anchor: str = "middle") -> None:
         if not s:
             return
-        self._bound((x - 24, y - 12), (x + 24, y + 5))
+        # Bound by an estimate of the rendered width (13px UI font,
+        # ~7.2px average advance), so a long label widens the viewBox
+        # instead of being clipped at its edge.
+        w = len(s) * 7.2
+        if anchor == "middle":
+            x0, x1 = x - w / 2.0, x + w / 2.0
+        elif anchor == "end":
+            x0, x1 = x - w, x
+        else:
+            x0, x1 = x, x + w
+        self._bound((x0, y - 12), (x1, y + 4))
         self.parts.append(
             '<text class="lbl" x="{0:g}" y="{1:g}" text-anchor="{2}">{3}</text>'
             .format(x, y, anchor, _esc(s)))
@@ -303,9 +489,17 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
     length = abs(y2 - y1) if vertical else abs(x2 - x1)
     maker = _BODIES.get(e.kind)
     body = maker(length) if maker else _body_box(length, e.kind.upper())
+    cv.eseg(x1, y1, x2, y2,
+            half=15.0 if e.kind in ("e", "j") else
+            0.0 if e.kind == "s" else 23.0)
 
     # Labels are emitted outside the rotated group, in absolute
     # coordinates, so that a vertical element's text stays horizontal.
+    # A source's circle (r = 15) is taller and wider than the other
+    # bodies, so its labels sit further out -- and a horizontal source
+    # puts the value *below* the circle, where a resistor-height offset
+    # would run the text straight through the stroke.
+    round_body = e.kind in ("e", "j")
     if vertical:
         top, bot = min(y1, y2), max(y1, y2)
         if y1 < y2:
@@ -315,8 +509,9 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
         cv.raw('<g transform="{0}">{1}</g>'.format(tf, body),
                (x1 - 22, top), (x1 + 22, bot))
         mx, my = x1, (top + bot) / 2.0
-        cv.text(mx + 17, my - 3, e.name, "start")
-        cv.text(mx + 17, my + 12, _pretty(e), "start")
+        dx = 20 if round_body else 17
+        cv.text(mx + dx, my - 3, e.name, "start")
+        cv.text(mx + dx, my + 12, _pretty(e), "start")
     else:
         left, right = min(x1, x2), max(x1, x2)
         if x1 < x2:
@@ -326,8 +521,18 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
         cv.raw('<g transform="{0}">{1}</g>'.format(tf, body),
                (left, y1 - 22), (right, y1 + 22))
         mx, my = (x1 + x2) / 2.0, y1
-        cv.text(mx, my - 25, e.name)
-        cv.text(mx, my - 11, _pretty(e))
+        if round_body:
+            cv.text(mx, my - 22, e.name)
+            cv.text(mx, my + 28, _pretty(e))
+        else:
+            cv.text(mx, my - 25, e.name)
+            val = _pretty(e)
+            if len(val) * 7.2 > 70:
+                # A long value centred above the body would run into
+                # the neighbouring node's name; below the wire is open.
+                cv.text(mx, my + 20, val)
+            else:
+                cv.text(mx, my - 11, val)
     if e.kind == "e":
         _polarity(cv, x1, y1, x2, y2)
     return mx, my
@@ -365,16 +570,43 @@ def _node_order(elements: List[Element]) -> List[str]:
             adj[a].append(b)
             adj[b].append(a)
 
+    # Op-amp links first: an op-amp's inverting input and output are not
+    # a two-terminal edge, but they do have to end up adjacent -- and
+    # walking that link *before* any resistor edge is what makes a
+    # cascade come out left to right. An adder's skip resistor (input
+    # straight to the second stage's summing node) is declared early and
+    # would otherwise drag the far output node into an early column,
+    # leaving the first op-amp pointing backwards through its own
+    # output wire.
     for e in elements:
-        if e.kind == "m":
-            continue
         if e.kind == "o":
-            # An op-amp is not a two-terminal edge, but its inverting
-            # input and its output do have to end up adjacent, or the
-            # output node gets stranded in its own component.
-            link(e.fields[1], e.fields[2])
-        else:
+            link(_op_up(e), e.fields[2])
+    # A weaker link second: non-inverting input to inverting input. For
+    # a non-inverting stage the feedback divider hangs off n- and often
+    # touches nothing else, so without this the only route to n- is
+    # *through* the output node and the stage comes out backwards. n+
+    # is usually ground, where link() is a no-op.
+    for e in elements:
+        if e.kind == "o":
+            link(e.fields[0], e.fields[1])
+    for e in elements:
+        if e.kind not in ("m", "o"):
             link(e.n1, e.n2)
+
+    # An op-amp's output node must land to the *right* of its inverting
+    # input, or the triangle is drawn backwards with its output wire
+    # retracing through the body. The link edges above make the two
+    # adjacent, but another element (an adder's skip resistor, a shared
+    # feedback network) can still hand the output node to the walk
+    # early -- so an output node whose inverting input has not been
+    # placed yet is deferred rather than visited. The forced pop when
+    # the stack runs dry keeps a pathological circuit (an output node
+    # that is the only path to its own input) from deadlocking; it just
+    # falls back to the old order there.
+    inv_input_of: Dict[str, str] = {}
+    for e in elements:
+        if e.kind == "o":
+            inv_input_of.setdefault(e.fields[2], _op_up(e))
 
     order: List[str] = []
     visited = set()
@@ -382,9 +614,20 @@ def _node_order(elements: List[Element]) -> List[str]:
         if start in visited:
             continue
         stack = [start]
-        while stack:
+        deferred: List[str] = []
+        while stack or deferred:
+            if not stack:
+                stack.append(deferred.pop(0))
+                forced = True
+            else:
+                forced = False
             n = stack.pop()
             if n in visited:
+                continue
+            minus = inv_input_of.get(n)
+            if not forced and minus is not None and minus not in visited \
+                    and minus in adj:
+                deferred.append(n)
                 continue
             visited.add(n)
             order.append(n)
@@ -392,6 +635,20 @@ def _node_order(elements: List[Element]) -> List[str]:
                 if m not in visited:
                     stack.append(m)
     return order
+
+
+def _ground_node(e: Element) -> str:
+    """The non-ground terminal of a grounded two-terminal element."""
+    return e.n2 if e.n1 == "0" else e.n1
+
+
+def _op_up(e: Element) -> str:
+    """The op-amp input drawn wired to the node row: the inverting
+    input normally, but the non-inverting one when the inverting input
+    is ground -- `o,1,0,o` is written that way round, and treating "0"
+    as a column would run the input riser through whatever hangs on
+    the leftmost column."""
+    return e.fields[1] if e.fields[1] != "0" else e.fields[0]
 
 
 class _Layout:
@@ -428,22 +685,99 @@ class _Layout:
             n = e.n2 if e.n1 == "0" else e.n1
             by_node.setdefault(n, []).append(e)
 
+        order = _node_order(self.elements)
+        idx = {n: i for i, n in enumerate(order)}
+
+        # The columns an op-amp occupies, in node-order index space. A
+        # grounded element hanging inside one of these spans would be
+        # drawn straight through the triangle or its wires -- the band
+        # between the node row and the rail is exactly where the op-amp
+        # sits -- so such elements are bumped out to a column of their
+        # own: before the span when they hang off the inverting-input
+        # end (a driving source belongs on the left), after it
+        # otherwise (a load belongs on the right).
+        spans_idx: List[Tuple[int, int]] = []
+        for e in self.opamps:
+            a, b = idx.get(_op_up(e)), idx.get(e.fields[2])
+            if a is not None and b is not None:
+                spans_idx.append((min(a, b), max(a, b)))
+
+        def span_of(i: int) -> Optional[Tuple[int, int]]:
+            for lo, hi in spans_idx:
+                if lo <= i <= hi:
+                    return (lo, hi)
+            return None
+
+        def bump_target(i: int) -> Tuple[str, int]:
+            """Where a grounded element on node index `i` (inside a
+            span) gets its own column: ("L", j) = just before node j,
+            ("R", j) = just after node j -- walked outward until the
+            insertion gap is inside no span at all (cascades chain
+            spans end to end)."""
+            lo, hi = span_of(i)
+            if i == lo:
+                j, moved = lo, True
+                while moved:
+                    moved = False
+                    for lo2, hi2 in spans_idx:
+                        if lo2 < j <= hi2:
+                            j, moved = lo2, True
+                return ("L", j)
+            j, moved = hi, True
+            while moved:
+                moved = False
+                for lo2, hi2 in spans_idx:
+                    if lo2 <= j < hi2:
+                        j, moved = hi2, True
+            return ("R", j)
+
+        pre: Dict[int, List[Element]] = {}
+        post: Dict[int, List[Element]] = {}
+        at_node: List[Tuple[str, Element]] = []
+        extra: Dict[int, List[Element]] = {}
+        for n, elems in by_node.items():
+            i = idx.get(n)
+            if i is None:
+                continue
+            if span_of(i) is not None:
+                side, j = bump_target(i)
+                for e in elems:
+                    (pre if side == "L" else post).setdefault(j, []).append(e)
+            else:
+                # The first element to ground hangs straight down from
+                # the node; any further ones are in parallel with it and
+                # need their own column, reached by a stub along the top
+                # row.
+                at_node.append((n, elems[0]))
+                for e in elems[1:]:
+                    extra.setdefault(i, []).append(e)
+
         col = 0
-        stubs: List[Tuple[int, int, int]] = []
-        for n in _node_order(self.elements):
+        own_col: List[Tuple[str, Element]] = []   # (node, elem) pairs
+        for i, n in enumerate(order):
+            for e in pre.get(i, []):
+                self.elem_col[e.name] = col
+                own_col.append((_ground_node(e), e))
+                col += 1
             self.node_col[n] = col
             col += 1
-            # The first element to ground hangs straight down from the
-            # node; any further ones are in parallel with it and need
-            # their own column, reached by a stub along the top row.
-            for i, e in enumerate(by_node.get(n, [])):
-                if i == 0:
-                    self.elem_col[e.name] = self.node_col[n]
-                else:
-                    self.elem_col[e.name] = col
-                    stubs.append((self.node_col[n], col, 0))
-                    col += 1
+            for e in extra.get(i, []):
+                self.elem_col[e.name] = col
+                own_col.append((_ground_node(e), e))
+                col += 1
+            for e in post.get(i, []):
+                self.elem_col[e.name] = col
+                own_col.append((_ground_node(e), e))
+                col += 1
         self.cols = max(col, 1)
+
+        for n, e in at_node:
+            self.elem_col[e.name] = self.node_col[n]
+
+        stubs: List[Tuple[int, int, int]] = []
+        for n, e in own_col:
+            a, b = self.node_col[n], self.elem_col[e.name]
+            stubs.append((min(a, b), max(a, b), 0))
 
         # Each element between two live nodes occupies the interval
         # between their columns on whichever row it is drawn. Two
@@ -462,10 +796,62 @@ class _Layout:
         spans = [(min(self.node_col[e.n1], self.node_col[e.n2]),
                   max(self.node_col[e.n1], self.node_col[e.n2]), e)
                  for e in self.spanning]
-        spans.sort(key=lambda s: (s[0], s[1]))
+        # Narrow before wide: an interval nested inside another must end
+        # up *below* it, so the outer element's risers drop past the
+        # inner one's endpoints (a shared node -- a junction) instead of
+        # the inner element's risers slicing up through the outer one's
+        # body.
+        spans.sort(key=lambda s: (s[1] - s[0], s[0]))
+
+        # Width alone is not enough: an element whose endpoint column
+        # sits exactly at another element's centre would send its riser
+        # straight through that element's body -- the one crossing a
+        # hop cannot express. Such a pair is ordered explicitly: the
+        # element in the way must go above, so the riser never reaches
+        # it. (Off-centre crossings land on leads and get hops.)
+        above: Dict[str, set] = {}   # name -> names it must sit above
+        for lo_a, hi_a, ea in spans:
+            for lo_b, hi_b, eb in spans:
+                if ea.name == eb.name:
+                    continue
+                for c in (lo_a, hi_a):
+                    if lo_b < c < hi_b and 2 * c == lo_b + hi_b:
+                        above.setdefault(eb.name, set()).add(ea.name)
+
+        # Kahn's walk over those constraints, keeping the width sort as
+        # the tie-break; a cycle (mutual centre hits) falls back to the
+        # sorted order for whatever remains.
+        ordered: List[Tuple[int, int, Element]] = []
+        pending = list(spans)
+        placed_names: set = set()
+        while pending:
+            pick = next(
+                (s for s in pending
+                 if above.get(s[2].name, set()) <= placed_names),
+                pending[0])
+            pending.remove(pick)
+            placed_names.add(pick[2].name)
+            ordered.append(pick)
+        spans = ordered
+
         placed: List[Tuple[int, int, int]] = list(stubs)
+        # A column that carries something down into the band below the
+        # node row -- a grounded element, an op-amp's input or output
+        # riser -- blocks the row above it too: an element spanning
+        # straight over it on the node row would sit on the descending
+        # wire's junction and read as connected to it. A zero-width
+        # interval conflicts only with spans that contain the column
+        # strictly, which is exactly the case to push up.
+        for c in self.elem_col.values():
+            placed.append((c, c, 0))
+        for e in self.opamps:
+            for n in (_op_up(e), e.fields[2]):
+                c = self.node_col.get(n)
+                if c is not None:
+                    placed.append((c, c, 0))
         for lo, hi, e in spans:
-            lvl = 0
+            lvl = max((self.level[a] + 1 for a in above.get(e.name, ())
+                       if a in self.level), default=0)
             while any(l == lvl and min(hi, h) > max(lo, o)
                       for o, h, l in placed):
                 lvl += 1
@@ -480,7 +866,7 @@ class _Layout:
         # throughout, since each stage owns its own columns.
         ops = []
         for e in self.opamps:
-            a = self.node_col.get(e.fields[1])
+            a = self.node_col.get(_op_up(e))
             b = self.node_col.get(e.fields[2])
             if a is not None and b is not None:
                 ops.append((min(a, b), max(a, b), e))
@@ -522,9 +908,17 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
 
     Returns the x at which its non-inverting input meets the ground
     rail, or None if that input is not grounded -- the caller needs it
-    to size the rail, or the wire drawn here would dangle."""
-    n_plus, n_minus, n_out = e.fields[0], e.fields[1], e.fields[2]
-    x_in = lay.px(lay.node_col[n_minus]) if n_minus in lay.node_col \
+    to size the rail, or the wire drawn here would dangle.
+
+    When the *inverting* input is the grounded one (`o,1,0,o`), the
+    pins swap: the non-inverting input takes the upper position and
+    its node's column, and the inverting one drops to the rail."""
+    n_out = e.fields[2]
+    up_node = _op_up(e)                             # wired to the top row
+    flip = up_node != e.fields[1]                   # n- grounded, pins swap
+    dn_node = e.fields[1] if flip else e.fields[0]  # rail, or its own row
+    up_sign, dn_sign = ("+", "−") if flip else ("−", "+")
+    x_in = lay.px(lay.node_col[up_node]) if up_node in lay.node_col \
         else lay.px(0)
     x_out = lay.px(lay.node_col[n_out]) if n_out in lay.node_col \
         else x_in + COL_W
@@ -543,36 +937,52 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
     cv.raw('<path d="M{0:g} {1:g} L{0:g} {2:g} L{3:g} {4:g} Z" fill="none"/>'
            .format(tx, mid - h / 2, mid + h / 2, tx + w, mid),
            (tx, mid - h / 2), (tx + w, mid + h / 2))
-    cv.text(tx + 13, y_minus + 5, "−", "middle")
-    cv.text(tx + 13, y_plus + 5, "+", "middle")
+    cv.text(tx + 13, y_minus + 5, up_sign, "middle")
+    cv.text(tx + 13, y_plus + 5, dn_sign, "middle")
     cv.text(tx + w / 2, mid - h / 2 - 8, e.name)
 
-    # inverting input: straight down from its node, then in
+    # upper input: straight down from its node, then in
     cv.wire(x_in, lay.y_top, x_in, y_minus)
     cv.wire(x_in, y_minus, tx, y_minus)
     # When several op-amps hang off one input node they share that
     # vertical wire, so the branch to this one is a T-junction and needs
     # a dot -- but only if another op-amp continues on past it.
-    if any(o.name != e.name and o.fields[1] == n_minus
+    if any(o.name != e.name and _op_up(o) == up_node
            and lay.op_lane.get(o.name, 0) > lane for o in lay.opamps):
         cv.dot(x_in, y_minus)
-    # non-inverting input: out to the left, then down to the rail (or up
-    # to its own node row if it is not grounded)
+    # lower input: out to the left, then down to the rail (or up to its
+    # own node row if it is not grounded)
     x_p = x_in - 30 - lane * 16
     cv.wire(tx, y_plus, x_p, y_plus)
-    if n_plus == "0":
+    if dn_node == "0":
         cv.wire(x_p, y_plus, x_p, lay.y_bot)
         grounded_at: Optional[float] = x_p
     else:
         grounded_at = None
-    if n_plus != "0":
-        xp_node = lay.px(lay.node_col[n_plus])
+        xp_node = lay.px(lay.node_col[dn_node])
         cv.wire(x_p, y_plus, x_p, lay.y_top + 12)
         cv.wire(x_p, lay.y_top + 12, xp_node, lay.y_top + 12)
         cv.wire(xp_node, lay.y_top + 12, xp_node, lay.y_top)
-    # output: up to its node on the top row
-    cv.wire(tx + w, mid, x_out, mid)
-    cv.wire(x_out, mid, x_out, lay.y_top)
+    # output: up to its node on the top row. When the output node's
+    # column is not comfortably right of the triangle -- above all the
+    # follower written `o1,1,2,2`, whose output *is* its inverting
+    # input -- the straight run would slice back through the body, so
+    # the wire loops over the top instead: out of the tip, up past the
+    # inverting lead, and back to the column it belongs to.
+    tip = tx + w
+    if x_out >= tip + 12:
+        cv.wire(tip, mid, x_out, mid)
+        cv.wire(x_out, mid, x_out, lay.y_top)
+    else:
+        xl, yl = tip + 14, y_minus - 16
+        cv.wire(tip, mid, xl, mid)
+        cv.wire(xl, mid, xl, yl)
+        cv.wire(xl, yl, x_out, yl)
+        if abs(x_out - x_in) < 0.5:
+            # Joins the inverting input's own riser: a real junction.
+            cv.dot(x_out, yl)
+        else:
+            cv.wire(x_out, yl, x_out, lay.y_top)
     return grounded_at
 
 
@@ -627,10 +1037,17 @@ def _render(elements: List[Element]) -> str:
         for x in sorted(set(ground_x)):
             if gx0 < x < gx1:
                 cv.dot(x, y_bot)
-        cv.wire(gx0, y_bot, gx0, y_bot + 12)
+        # The ground symbol is drawn raw rather than as wires: its bars
+        # are decoration, and the wire pass would otherwise mistake the
+        # stem meeting the first bar for a T-junction and dot it.
+        stem_and_bars = ['<path d="M{0:g} {1:g} L{0:g} {2:g}"/>'.format(
+            gx0, y_bot, y_bot + 12)]
         for i, half in enumerate((11.0, 7.0, 3.0)):
             yy = y_bot + 12 + i * 4
-            cv.wire(gx0 - half, yy, gx0 + half, yy)
+            stem_and_bars.append('<path d="M{0:g} {1:g} L{2:g} {1:g}"/>'
+                                 .format(gx0 - half, yy, gx0 + half))
+        cv.raw("".join(stem_and_bars),
+               (gx0 - 11, y_bot), (gx0 + 11, y_bot + 20))
         # Name the reference node, same as every other node is named --
         # "0" is a node in the description like any other, and readers
         # tracing v_2 back to its reference need to see it.
@@ -669,6 +1086,11 @@ def _render(elements: List[Element]) -> str:
         cx, cy = cv.x0, cv.y0 - 14
         for i, line in enumerate(reversed(captions)):
             cv.text(cx, cy - i * 17, line, "start")
+
+    # 8. emit the collected wires -- merged, with junction dots at every
+    #    T-joint and a semicircular hop wherever two wires cross without
+    #    connecting.
+    cv.flush()
 
     x0, y0 = cv.x0 - 26, cv.y0 - 26
     w, h = (cv.x1 - cv.x0) + 52, (cv.y1 - cv.y0) + 52
