@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.15 -- 27 Aug 2026
+
+### Fixed
+- **An impulse-valued TR answer now says so.** `tr()` passed every
+  s-free s-domain value through untransformed, so a circuit answer that
+  was genuinely an impulse printed as a bare constant --
+  `e,1,0,10*delta(t)` into a resistor reported `v_1 = 10`, identical to
+  a 10 V step. But a circuit answer constant in s *is* an impulse: a
+  step arrives as `k/s` and a waveform brings its own s, so a bare
+  constant has nowhere else to come from. Those answers now come back
+  multiplied by `DiracDelta(t)`: `v_1 = 10*DiracDelta(t)`.
+
+  The pass-through was protecting two real cases, and both still pass
+  through -- discriminated by provenance now, not by the expression's
+  shape. A solved expert-mode unknown is a scalar (`k = 5` means the
+  amplitude is 5), recognised by its key; a dependent source's echo of
+  its controlling answer (`i_j = 2*ir3`) is a relation whose symbols
+  name functions, so it reads identically in s and in t, recognised by
+  `_is_controlled`. Zero answers are unaffected either way --
+  `0*DiracDelta(t)` is 0.
+
+  Found on 27 Aug 2026 while wiring TR answers into the app's
+  Numerical Solver handover; every impulse example in the tutorial
+  prints only s-bearing answers (`vc`, `ic`, `vo`), which is how the
+  wrong constants went unnoticed. Answers mixing an impulse with a
+  tail (`DiracDelta(t) - exp(-t)`) were already right.
+
 ## 0.5.14 -- 27 Aug 2026
 
 ### Fixed

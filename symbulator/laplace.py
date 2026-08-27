@@ -347,22 +347,47 @@ def tr(desc: str, params: Optional[dict] = None,
                   suffix=suffix)
     keys = list(variables) if variables is not None else list(s_domain.values.keys())
 
+    # Which keys hold solved expert-mode unknowns: those values are
+    # scalars (a source's amplitude, a component's size), not waveforms,
+    # and must never be transformed. Everything else in `values` is a
+    # circuit answer -- a node voltage or element current -- and IS a
+    # waveform, whatever its expression looks like.
+    scalar_keys = {str(u) for u in (unknowns or [])}
+    try:
+        from .elements import parse_circuit
+        _elements = parse_circuit(desc)
+    except Exception:                                         # noqa: BLE001
+        _elements = []
+
     time_domain = {}
     for key in keys:
         expr = s_domain.values.get(key)
         if expr is None:
             continue
-        # A value with no `s` in it is not a waveform: an expert-mode
-        # unknown such as a source's amplitude, or an answer that simply
-        # came out constant. It is already in its final form, and
-        # transforming it is destructive rather than merely pointless --
-        # inverse_laplace_transform(1, s, t) is DiracDelta(t), which is
-        # not what a source amplitude means even now that the delta
-        # survives: the number 1 is the answer, not an impulse of 1.
-        # (Under the old strictly-positive t it was worse -- the delta
-        # collapsed to 0, so the amplitude came back as nothing at all.)
+        # A value with no `s` in it is one of three things, and only one
+        # of them is finished:
+        #
+        # - A solved expert-mode unknown: a scalar. `k = 5` means the
+        #   amplitude is 5, and multiplying it by delta(t) would turn a
+        #   number into an impulse. Recognised by its key.
+        # - A reference to another answer (`i_j = 2*ir3`, a dependent
+        #   source echoing its controlling current): the symbols name
+        #   *functions*, so the relation reads identically in s and in
+        #   t, and passing it through unchanged is the transform.
+        #   Recognised by _is_controlled.
+        # - A genuine circuit answer that is constant in s. That IS an
+        #   impulse: a step arrives as k/s and a waveform brings its own
+        #   s, so a bare constant has nowhere else to come from --
+        #   inverse_laplace_transform(k, s, t) = k*DiracDelta(t). Until
+        #   0.5.15 this case was passed through with the other two, so
+        #   `e,1,0,10*delta(t)` into a resistor reported v_1 = 10: a
+        #   10 V*s impulse printed identically to a 10 V step. (Zero
+        #   stays zero either way -- 0*delta(t) is 0.)
         if not getattr(expr, "has", None) or not expr.has(S):
-            time_domain[key] = expr
+            if key in scalar_keys or _is_controlled(expr, _elements):
+                time_domain[key] = expr
+            else:
+                time_domain[key] = expr * sp.DiracDelta(t)
             continue
         try:
             time_domain[key] = _invert(expr, S, t)

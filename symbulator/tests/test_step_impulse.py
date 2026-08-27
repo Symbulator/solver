@@ -304,3 +304,65 @@ def test_a_bracket_that_cannot_transform_is_refused():
             assert expect in str(exc), str(exc)
         else:
             raise AssertionError(f"{bad} should have been refused")
+
+
+# ---------------------------- an s-free circuit answer is an impulse --------
+#
+# Until 0.5.15, tr() passed every s-free s-domain value through
+# untransformed, so a 10 V*s impulse printed identically to a 10 V step
+# -- both said 10. The pass-through was protecting two real cases, and
+# still does: a solved expert-mode unknown is a scalar (recognised by
+# its key), and a dependent source's echo of its controlling answer is a
+# relation whose symbols name functions (recognised by _is_controlled).
+# Everything else that is constant in s IS an impulse -- a step arrives
+# as k/s and a waveform brings its own s, so a bare constant has nowhere
+# else to come from.
+
+def test_an_impulse_into_a_resistor_says_delta():
+    t = sb.t
+    res = tr("e,1,0,10*delta(t):r1,1,0,1")
+    assert sp.simplify(res.values["v_1"] - 10 * sp.DiracDelta(t)) == 0
+    assert sp.simplify(res.values["i_r1"] - 10 * sp.DiracDelta(t)) == 0
+
+
+def test_a_step_into_a_resistor_still_says_its_level():
+    res = tr("e,1,0,10*u(t):r1,1,0,1")
+    assert sp.simplify(_in_time(res.values["v_1"]) - 10) == 0
+
+
+def test_a_symbolic_impulse_keeps_its_amplitude():
+    # Bo2's Figure 5.38: the source's own current is i*delta(t), and it
+    # used to come back as the bare i.
+    t = sb.t
+    res = tr("j,0,1,i*delta(t):c,1,0,c,0:r,1,0,r")
+    assert sp.simplify(res.values["i_j"]
+                       - sp.Symbol("i") * sp.DiracDelta(t)) == 0
+
+
+def test_a_capacitor_across_a_step_draws_an_impulse():
+    # i = C dv/dt, and the step's jump is the impulse.
+    t = sb.t
+    res = tr("e,1,0,u(t):c,1,0,1,0")
+    assert sp.simplify(res.values["i_c"] - sp.DiracDelta(t)) == 0
+
+
+def test_a_zero_answer_stays_zero():
+    # Bo2's Example 5.7: no current into an ideal op-amp's source leg.
+    res = tr("e,1,0,u(t):o,1,2,o:c,2,o,1/8,0:r2,2,o,2:r1,2,0,1")
+    assert res.values["i_e"] == 0
+
+
+def test_a_dependent_echo_is_a_relation_not_an_impulse():
+    # Bo2's p230: the controlled source's current echoes its controlling
+    # current. The symbols name functions -- the relation reads the same
+    # in s and in t -- so it must pass through, not gain a delta.
+    res = tr("r,v,0,r:j,v,0,2*ir:l,v,0,l,5")
+    assert sp.simplify(res.values["i_j"] - 2 * sp.Symbol("ir")) == 0
+
+
+def test_an_expert_unknown_stays_a_scalar():
+    # Solving for a source's amplitude: the answer is the number 5, not
+    # an impulse of 5. This is the case the old shape-based pass-through
+    # existed to protect, now recognised by its key instead.
+    res = tr("e,1,0,k:r1,1,0,1", equations=["v_1 = 5"], unknowns=["k"])
+    assert sp.simplify(res.values["k"] - 5) == 0
