@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.16 -- 28 Aug 2026
+
+### Changed
+- **The schematic drawer was reviewed against all 322 circuits in the
+  version 9 tutorial and reworked.** The headline rules: a wire never
+  crosses an element body; a crossing that is not a connection is
+  drawn as the standard semicircular hop, and every T-joint gets its
+  junction dot, so the two can never be confused; junctions coincide
+  with node corners wherever the row allows; and values are shown the
+  way the reader typed them.
+
+  In detail, labels first: a phasor source keeps its angle notation
+  (`110∠-120°`) instead of the 17-digit rectangular number it expands
+  to; long float literals round to 5 significant digits; `30*pi/180`
+  in a value reads back as `30°`; the `[a,b]` parallel shortcut is
+  restored from its `pr(a,b)` rewrite; a value too long to letter at
+  its element moves to a caption line below the drawing (`name =
+  value`, the block the mutual inductances already used -- their
+  captions move down there too); the viewBox accounts for text width,
+  so nothing is clipped; and a source's value sits clear of its
+  circle.
+
+  Layout second, mostly op-amps: cascades draw left to right (the
+  node walk follows the inverting-input-to-output link, defers an
+  output node until its input is placed, and links n+ toward n-);
+  grounded elements hanging on a column an op-amp occupies bump to a
+  stub column outside its span; a non-inverting stage whose + input
+  connects only to a grounded source draws that source in the input
+  drop, under the triangle, the way a textbook does; an op-amp whose
+  *inverting* input is ground mirrors its pins; the follower written
+  `o1,1,2,2` springs its feedback straight up from the tip corner and
+  joins the output node at the node's own corner dot; and stacked
+  spans order narrow-below-wide so an outer element's risers land on
+  junctions instead of slicing through an inner element's body.
+
 ## 0.5.15 -- 27 Aug 2026
 
 ### Fixed
