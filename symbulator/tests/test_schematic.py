@@ -311,6 +311,8 @@ def test_no_wire_grazes_an_opamp_triangle():
             assert not (oy0 - 4 < y1 < oy1 + 4), (
                 "horizontal wire at y=%g grazes the triangle" % y1)
         else:                        # vertical
+            if abs(x1 - ox1) < 1 and abs(max(y1, y2) - (oy0 + oy1) / 2) < 1:
+                continue             # rises straight from the tip corner
             if oy0 - 4 < max(y1, y2) and min(y1, y2) < oy1 + 4:
                 assert not (ox0 - 4 < x1 < ox1 + 4), (
                     "vertical wire at x=%g grazes the triangle" % x1)
