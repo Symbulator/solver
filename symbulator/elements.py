@@ -263,7 +263,10 @@ def _validate_topology(elements: List[Element], two_port_nodes: Optional[tuple] 
     """Whole-circuit sanity checks that can't be done element-by-element
     (ports `symbv8s3`): the circuit must be grounded (some node is 0, or
     a grounded-kind element like a two-port block is present), and no
-    element may short its own two terminals together.
+    element may have both terminals on the same node -- a rule that
+    binds even the short circuit, whose job is joining two *distinct*
+    nodes: a self-loop's current enters and leaves the same KCL sum
+    and so is indeterminate.
 
     `two_port_nodes`, when given, additionally checks that the two named
     port nodes (n1, n2) both actually appear somewhere in the circuit --
