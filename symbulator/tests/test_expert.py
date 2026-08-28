@@ -239,14 +239,15 @@ def test_dependent_source_accepts_calculator_spelling():
 
 
 def test_the_1999_netlist_runs_verbatim():
-    """The two-stage amplifier from the 1999 competition paper, with
-    its `0.05*v1` controlled sources spelled exactly as written a
-    quarter century ago."""
+    """The two-stage amplifier from the 1999 competition paper and the
+    2001 thesis (Problem 87), each element spelled exactly as printed
+    a quarter century ago -- `5/100*v1` controls, `10^-10` powers,
+    flat names -- with only the separator modernised."""
     from symbulator import fd
     desc = ("e1,5,0,vg:r1,5,1,150:r2,1,0,1000:"
-            "cc1,1,0,1e-10:cc2,1,2,3e-12:jd1,2,0,0.05*v1:"
+            "cc1,1,0,10^-10:cc2,1,2,3*10^-12:jd1,2,0,5/100*v1:"
             "r3,2,0,2000:r4,2,3,100:r5,3,0,1000:"
-            "cc3,3,0,1e-10:cc4,3,4,3e-12:jd2,4,0,0.05*v3:"
+            "cc3,3,0,10^-10:cc4,3,4,3*10^-12:jd2,4,0,5/100*v3:"
             "r6,4,0,2000")
     res = fd(desc)
     ratio = sp.simplify(res["v_4"] / res["v_5"])
