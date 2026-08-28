@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.18 -- 28 Aug 2026
+
+### Changed
+- **The schematic op-amp's + and - pin signs match the voltage
+  source's polarity marks (#130).** They were 13px text glyphs, filled
+  from the label font, sitting beside a source whose marks are stroked
+  3.5px arms at the page's 1.7px stroke -- visibly heavier and a
+  different drawing style in the same figure. Both now draw through
+  one helper (`_sign_mark`), so they are identical in size and weight
+  and cannot fall out of step again.
+
 ## 0.5.17 -- 28 Aug 2026
 
 ### Changed

@@ -482,6 +482,25 @@ def _coupling_dot(cv: _Canvas, x1: float, y1: float, x2: float,
     cv.dot(x1 + ux * along + ox, y1 + uy * along + oy)
 
 
+def _sign_mark(cv: _Canvas, x: float, y: float, plus: bool) -> None:
+    """A stroked + or - centred on (x, y): 3.5px arms at the page's own
+    stroke width. One drawing style for every sign in a schematic --
+    the voltage source's polarity and the op-amp's input pins draw
+    through here, so they cannot fall out of step (#130: the op-amp's
+    used to be 13px text glyphs, visibly heavier than the source's
+    marks beside them)."""
+    arm = 3.5
+    if plus:
+        cv.raw('<path d="M{0:g} {1:g} L{2:g} {1:g} M{3:g} {4:g} L{3:g} '
+               '{5:g}"/>'
+               .format(x - arm, y, x + arm, x, y - arm, y + arm),
+               (x - arm, y - arm), (x + arm, y + arm))
+    else:
+        cv.raw('<path d="M{0:g} {1:g} L{2:g} {1:g}"/>'
+               .format(x - arm, y, x + arm),
+               (x - arm, y), (x + arm, y))
+
+
 def _polarity(cv: _Canvas, x1: float, y1: float, x2: float,
               y2: float) -> None:
     """Mark a voltage source + at the n1 end and - at the n2 end, which
@@ -496,15 +515,9 @@ def _polarity(cv: _Canvas, x1: float, y1: float, x2: float,
         return
     ux, uy = dx / span, dy / span          # n1 -> n2, unit length
     cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-    off, arm = 7.0, 3.5
-    px_, py = cx - ux * off, cy - uy * off     # + sits toward n1
-    mx_, my_ = cx + ux * off, cy + uy * off    # - sits toward n2
-    cv.raw('<path d="M{0:g} {1:g} L{2:g} {1:g} M{3:g} {4:g} L{3:g} {5:g}"/>'
-           .format(px_ - arm, py, px_ + arm, px_, py - arm, py + arm),
-           (px_ - arm, py - arm), (px_ + arm, py + arm))
-    cv.raw('<path d="M{0:g} {1:g} L{2:g} {1:g}"/>'
-           .format(mx_ - arm, my_, mx_ + arm),
-           (mx_ - arm, my_), (mx_ + arm, my_))
+    off = 7.0
+    _sign_mark(cv, cx - ux * off, cy - uy * off, True)    # + toward n1
+    _sign_mark(cv, cx + ux * off, cy + uy * off, False)   # - toward n2
 
 
 def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
@@ -1019,8 +1032,10 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
            .format(tx, mid - h / 2, mid + h / 2, tx + w, mid),
            (tx, mid - h / 2), (tx + w, mid + h / 2))
     cv.obstacle(tx, mid - h / 2, tx + w, mid + h / 2)
-    cv.text(tx + 13, y_minus + 5, up_sign, "middle")
-    cv.text(tx + 13, y_plus + 5, dn_sign, "middle")
+    # The pin signs are stroked marks, not text glyphs, so they match
+    # the voltage source's polarity marks in weight and size (#130).
+    _sign_mark(cv, tx + 13, y_minus, up_sign == "+")
+    _sign_mark(cv, tx + 13, y_plus, dn_sign == "+")
     # The feedback loop drawn when the output cannot go right (below)
     # passes over the triangle's top, where the name normally sits, so
     # the name yields the spot and moves under the body instead.
