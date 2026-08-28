@@ -870,13 +870,28 @@ def solve_circuit_all(elements: List[Element], domain: str, omega=None,
                     circuit.unknowns.append(sym)
                 existing.add(str(sym))
 
+    # Conditions come in two forms, both spellings of the calculator's
+    # `|` ("with") operator. An equality (`r_a = 1000`) is a
+    # substitution applied to the whole system before solving, as
+    # always. An INEQUALITY (`Vs > 0`) is a restriction on which
+    # solutions may be returned -- exactly what `solve(...) | vs>0` did
+    # on the TI -- applied as a filter after the solve, which is the
+    # only place it can act: a quadratic constraint yields its
+    # sign-symmetric solution pairs regardless, and the inequality is
+    # what picks among them.
+    filters: List[Tuple[str, sp.Rel]] = []
     if conditions:
         subs_map = {}
         for raw in conditions:
             text = expand_shorthand(str(raw))
+            rel = _parse_inequality(text, reserve_imaginary)
+            if rel is not None:
+                filters.append((str(raw), rel))
+                continue
             if "=" not in text:
                 raise CircuitError(
-                    f"Condition '{raw}' must have the form name = value.")
+                    f"Condition '{raw}' must have the form name = value, "
+                    f"or be an inequality such as name > 0.")
             lhs, rhs = text.split("=", 1)
             subs_map[safe_sympify(lhs, reserve_imaginary=reserve_imaginary)] = \
                 safe_sympify(rhs, reserve_imaginary=reserve_imaginary)
@@ -886,7 +901,7 @@ def solve_circuit_all(elements: List[Element], domain: str, omega=None,
         circuit.unknowns = [u for u in circuit.unknowns if u not in subs_map]
 
     if not circuit.unknowns:
-        return [{k: sp.simplify(v) for k, v in circuit.known.items()}]
+        results = [{k: sp.simplify(v) for k, v in circuit.known.items()}]
     else:
         unknowns = list(dict.fromkeys(circuit.unknowns))  # de-dup, preserve order
         solutions = sp.solve(circuit.equations, unknowns, dict=True)
@@ -906,7 +921,60 @@ def solve_circuit_all(elements: List[Element], domain: str, omega=None,
         results = []
         for sol in _rank_solutions(solutions):
             results.append(_expand_solution(circuit, sol))
-        return results
+
+    if filters:
+        results = _filter_solutions(results, filters)
+    return results
+
+
+# The four relational operators an inequality condition may use, longest
+# spellings first so `>=` is not read as `>` followed by a stray `=`.
+_INEQ_OPS = ((">=", sp.Ge), ("<=", sp.Le), (">", sp.Gt), ("<", sp.Lt))
+
+
+def _parse_inequality(text: str, reserve_imaginary: bool):
+    """`Vs > 0` as a SymPy relational, or None when `text` is not an
+    inequality. Parsed by hand rather than through safe_sympify, whose
+    syntax gate deliberately refuses comparisons inside *values*."""
+    for op, make in _INEQ_OPS:
+        if op in text:
+            lhs, rhs = text.split(op, 1)
+            return make(
+                safe_sympify(lhs, reserve_imaginary=reserve_imaginary),
+                safe_sympify(rhs, reserve_imaginary=reserve_imaginary))
+    return None
+
+
+def _filter_solutions(results, filters):
+    """Keep the solutions that satisfy every inequality condition.
+
+    Each relation is evaluated with the solution's own values
+    substituted in. A relation that comes back False drops the
+    solution; one that cannot be decided (symbols remain -- a symbolic
+    circuit) keeps it, since the restriction has nothing definite to
+    say there. Filtering everything out is reported as its own error:
+    it means the circuit's mathematics and the caller's restriction
+    genuinely disagree, which is an answer, not a failure to solve."""
+    kept = []
+    for r in results:
+        smap = {_sym(k): v for k, v in r.items()}
+        ok = True
+        for raw, rel in filters:
+            try:
+                verdict = sp.simplify(rel.subs(smap))
+            except Exception:                                 # noqa: BLE001
+                continue          # undecidable: the filter stays silent
+            if verdict is sp.false or verdict is False:
+                ok = False
+                break
+        if ok:
+            kept.append(r)
+    if not kept:
+        names = ", ".join(f"'{raw}'" for raw, _ in filters)
+        raise CircuitError(
+            f"No solution satisfies the condition(s) {names}. The system "
+            f"solves, but every solution violates the restriction.")
+    return kept
 
 
 def _expand_solution(circuit: "Circuit", sol: Dict[sp.Symbol, sp.Expr]) -> Dict[str, sp.Expr]:

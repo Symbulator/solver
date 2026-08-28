@@ -182,3 +182,45 @@ def test_single_solution_is_not_flagged_multiple():
     assert not res.multiple
     assert res.solutions == [res.values]
     assert "solutions" not in repr(res)
+
+
+# --- inequality conditions: the | operator's full breadth -------------
+
+def test_inequality_condition_selects_among_solutions():
+    """A quadratic power constraint yields sign-symmetric roots; an
+    inequality condition -- solve(...)|x>0 on the calculator -- picks
+    among them, in the same call."""
+    res = dc("e1,1,0,vx:r1,1,0,4",
+             equations=["p_r1 = 9"], unknowns=["vx"],
+             conditions=["vx > 0"])
+    assert len(res.solutions) == 1
+    assert res["vx"] == 6
+
+
+def test_inequality_condition_that_excludes_everything_is_reported():
+    with pytest.raises(CircuitError):
+        dc("e1,1,0,vx:r1,1,0,4",
+           equations=["p_r1 = 9"], unknowns=["vx"],
+           conditions=["vx > 100"])
+
+
+def test_equality_and_inequality_conditions_mix():
+    res = dc("e1,1,0,vx:r1,1,0,rx",
+             equations=["p_r1 = 9"], unknowns=["vx"],
+             conditions=["rx = 4", "vx < 0"])
+    assert res["vx"] == -6
+
+
+# --- Python keywords as variable names --------------------------------
+
+def test_is_works_as_a_symbol_name():
+    """A source current named 'is' is the most natural name in circuit
+    analysis; Python's grammar must not leak through the parser."""
+    res = dc("j1,0,1,is:r1,1,0,10")
+    assert res["v_1"] == 10 * sp.Symbol("is")
+
+
+def test_is_can_be_solved_for_in_expert_mode():
+    res = dc("j1,0,1,is:r1,1,0,10",
+             equations=["v_1 = 25"], unknowns=["is"])
+    assert res["is"] == sp.Rational(5, 2)

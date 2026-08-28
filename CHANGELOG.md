@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.19 -- 28 Aug 2026
+
+### Added
+- **Inequality conditions -- the `|` operator's full breadth.** On the
+  calculators, `solve(...) | vs>0` restricted which solutions came
+  back; the port had narrowed conditions to `name = value`
+  substitutions only. An expert-mode condition may now also be an
+  inequality (`vs > 0`, `x <= 3`), applied as a filter on the
+  solutions after the solve -- the natural way to select among the
+  sign-symmetric roots a quadratic power constraint produces, in the
+  same call. A restriction that excludes every solution is reported
+  as such: the system solves, but the mathematics and the restriction
+  disagree, which is an answer rather than a failure. Equality
+  conditions substitute exactly as before, and the two kinds mix.
+  Roberto's call, solving his 2013 four-dependent-source showcase for
+  the monograph.
+
+- **Python keywords work as variable names.** `is` -- the most
+  natural name a source current can have -- was refused: values parse
+  through Python's own grammar, and its reserved words leaked through
+  to the circuits user. Keywords used as bare names are now shielded
+  behind sentinel identifiers before parsing and restored as ordinary
+  symbols after, so `j1,0,1,is` and `unknowns=['is']` work
+  everywhere a name can appear. `True`/`False`/`None` stay excluded:
+  those are literals, and refusing them beats quietly turning them
+  into symbols.
+
 ## 0.5.18 -- 28 Aug 2026
 
 ### Changed

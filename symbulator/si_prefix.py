@@ -662,6 +662,45 @@ def _names_called(text: str, ns: dict) -> list:
     return out
 
 
+# Python keywords, usable as plain variable names in a circuit. A
+# circuits reader who names a current source `is` -- the most natural
+# name there is for it -- should not be told about Python's grammar:
+# `is`, `in`, `if` and the rest are meaningless in the value language
+# anyway (the syntax gate refuses boolean and comparison operators),
+# so a bare keyword token can only ever be a variable. It is shielded
+# behind a sentinel name before parsing and the real symbol restored
+# after. `True`/`False`/`None` stay excluded: those are literals, and
+# refusing them (as before) beats quietly turning them into symbols.
+import keyword as _keyword
+
+_SHIELDABLE = [k for k in _keyword.kwlist
+               if k not in ("True", "False", "None")]
+# A keyword counts only as a standalone name: not part of a longer
+# identifier, not attribute-ish, and not called like a function.
+_KW_RE = re.compile(
+    r"(?<![\w.])(" + "|".join(_SHIELDABLE) + r")(?![\w(])")
+_KW_SENTINEL = "_kw_{}_zz"
+_KW_BACK = re.compile(r"^_kw_(\w+)_zz$")
+
+
+def _shield_keywords(text: str) -> str:
+    return _KW_RE.sub(lambda m: _KW_SENTINEL.format(m.group(1)), text)
+
+
+def _unshield_keywords(expr):
+    """Sentinel symbols back to their keyword names, in the parsed
+    expression. sp.Symbol('is') is perfectly legal inside SymPy -- only
+    Python's own parser ever objected."""
+    import sympy as sp
+
+    mapping = {}
+    for s in getattr(expr, "free_symbols", ()):  # noqa: B007
+        m = _KW_BACK.match(s.name)
+        if m:
+            mapping[s] = sp.Symbol(m.group(1))
+    return expr.subs(mapping) if mapping else expr
+
+
 def safe_sympify(text: str, reserve_imaginary: bool = True,
                  original: str = None):
     """sympify() restricted to the namespace above: every identifier that
@@ -673,19 +712,26 @@ def safe_sympify(text: str, reserve_imaginary: bool = True,
     analysis where complex values don't apply (dc, fd, tr).
 
     `original` is what the user typed, when `text` is a rewrite of it --
-    see check_expression_syntax."""
+    see check_expression_syntax.
+
+    A Python keyword used as a plain name (`is`, for a source current)
+    is accepted and becomes an ordinary symbol of that name -- see
+    _shield_keywords above."""
     import sympy as sp
 
-    check_expression_syntax(text, original)
+    shown_source = original if original is not None else text
+    text = _shield_keywords(text)
+
+    check_expression_syntax(text, shown_source)
     ns = _allowed_namespace(reserve_imaginary)
     for name in set(_IDENT_RE.findall(text)):
         ns.setdefault(name, sp.Symbol(name))
     try:
-        return sp.sympify(text, locals=ns)
+        return _unshield_keywords(sp.sympify(text, locals=ns))
     except TypeError as exc:
         if "not callable" not in str(exc):
             raise
-        shown = (original if original is not None else text).strip()
+        shown = shown_source.strip()
         called = _names_called(text, ns)
         rewritten = original is not None and original.strip() != text.strip()
         # Name the culprit only when the text was not rewritten -- after a
