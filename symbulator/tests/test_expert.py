@@ -224,3 +224,45 @@ def test_is_can_be_solved_for_in_expert_mode():
     res = dc("j1,0,1,is:r1,1,0,10",
              equations=["v_1 = 25"], unknowns=["is"])
     assert res["is"] == sp.Rational(5, 2)
+
+
+# --- full spelling equivalence of answer names ------------------------
+# Underscored and non-underscored spellings are ONE name, everywhere:
+# `ir1` is `i_r1` (and `IR1`, and `I_R1`), exactly as they were one
+# calculator variable before version 9's underscore convention.
+
+def test_dependent_source_accepts_calculator_spelling():
+    """`0.5*ir1` in a value means half the current through r1."""
+    a = dc("e1,1,0,12:r1,1,2,4:r2,2,0,2:j1,0,3,0.5*ir1:r3,3,0,10")
+    b = dc("e1,1,0,12:r1,1,2,4:r2,2,0,2:j1,0,3,0.5*i_r1:r3,3,0,10")
+    assert a["v_3"] == b["v_3"] != 0
+
+
+def test_the_1999_netlist_runs_verbatim():
+    """The two-stage amplifier from the 1999 competition paper, with
+    its `0.05*v1` controlled sources spelled exactly as written a
+    quarter century ago."""
+    from symbulator import fd
+    desc = ("e1,5,0,vg:r1,5,1,150:r2,1,0,1000:"
+            "cc1,1,0,1e-10:cc2,1,2,3e-12:jd1,2,0,0.05*v1:"
+            "r3,2,0,2000:r4,2,3,100:r5,3,0,1000:"
+            "cc3,3,0,1e-10:cc4,3,4,3e-12:jd2,4,0,0.05*v3:"
+            "r6,4,0,2000")
+    res = fd(desc)
+    ratio = sp.simplify(res["v_4"] / res["v_5"])
+    # The transfer function depends on s but not on the source symbol.
+    assert sp.Symbol("s") in ratio.free_symbols
+    assert sp.Symbol("vg") not in ratio.free_symbols
+
+
+def test_alias_binds_is_to_the_short_named_s():
+    """With an element named s in the circuit, `is` IS its current --
+    the two spellings are one name by design."""
+    res = dc("e1,1,0,12:s,1,2:r1,2,0,4:j1,0,3,2*is:r2,3,0,1")
+    assert res["v_3"] == 6          # 2 * i_s = 2 * 3
+
+
+def test_expert_equation_accepts_calculator_spelling():
+    res = dc("e1,1,0,12:r1,1,2,4'k:r2,2,0,rx",
+             equations=["vr2 = 6"], unknowns=["rx"])
+    assert res["rx"] == 4000

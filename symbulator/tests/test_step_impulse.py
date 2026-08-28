@@ -354,10 +354,12 @@ def test_a_zero_answer_stays_zero():
 
 def test_a_dependent_echo_is_a_relation_not_an_impulse():
     # Bo2's p230: the controlled source's current echoes its controlling
-    # current. The symbols name functions -- the relation reads the same
-    # in s and in t -- so it must pass through, not gain a delta.
+    # current. Since spelling equivalence, `ir` IS `i_r`, so the echo
+    # resolves through the closure to twice the resistor's current --
+    # and must not gain a delta on the way.
     res = tr("r,v,0,r:j,v,0,2*ir:l,v,0,l,5")
-    assert sp.simplify(res.values["i_j"] - 2 * sp.Symbol("ir")) == 0
+    assert sp.simplify(res.values["i_j"] - 2 * res.values["i_r"]) == 0
+    assert not res.values["i_j"].has(sp.DiracDelta)
 
 
 def test_an_expert_unknown_stays_a_scalar():

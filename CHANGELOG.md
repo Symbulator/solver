@@ -27,6 +27,22 @@
   those are literals, and refusing them beats quietly turning them
   into symbols.
 
+- **Underscored and plain spellings are one name, everywhere.** On the
+  TI calculators every answer variable was one flat word -- `ir1`,
+  `vc2`, `is` -- and version 9's `i_r1` convention split each of them
+  in two. The split is now healed: every circuit builds an alias map
+  from its own inventory (nodes and elements), and any spelling that
+  normalises to a known answer name -- case-insensitive, underscores
+  ignored -- is canonicalised to it wherever expressions are read:
+  element values (`j2,0,3,0.5*ir1` controls on the current through
+  r1), expert equations, unknowns, and both kinds of condition. A
+  1999-era netlist now runs verbatim. Names that match nothing in the
+  circuit are left untouched, so free symbols still pass through; the
+  one behavioural change is that a bare spelling which happens to
+  collide with a real answer name now means that answer, as it always
+  did on the calculator. Roberto's design call: "if there is a i_s,
+  there is also an is."
+
 ## 0.5.18 -- 28 Aug 2026
 
 ### Changed

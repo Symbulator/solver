@@ -43,6 +43,60 @@ def _sym(name: str) -> sp.Symbol:
     return sp.Symbol(name)
 
 
+# Answer-name prefixes an alias may resolve to, per element. `v_` for
+# nodes is added separately (and wins a collision, matching the
+# node-owned precedence in stamp_all's reference closure).
+_ALIAS_PREFIXES = ("i", "v", "p", "r", "z", "s", "ap")
+
+
+def _norm_name(name: str) -> str:
+    return name.lower().replace("_", "")
+
+
+def _alias_map(elements: List[Element]) -> Dict[str, str]:
+    """Underscore-and-case-insensitive spellings of every answer name
+    this circuit can produce, mapped to the canonical spelling.
+
+    Symbulator's design gives the underscored and non-underscored
+    spellings FULL equivalence, everywhere a name can appear: `ir1`,
+    `i_r1`, `IR1` and `I_R1` are one name, exactly as they were one
+    calculator variable before version 9 introduced the underscore
+    convention. The map is built from the circuit itself -- node
+    voltages first (a node named `r1` owns `v_r1` over element r1's
+    voltage drop, matching stamp_all), then every answer prefix of
+    every element name. A spelling that matches nothing here is an
+    ordinary free symbol, untouched."""
+    amap: Dict[str, str] = {}
+    for e in elements:
+        if e.kind == "m":
+            continue
+        nodes = e.fields[:3] if e.kind == "o" else [e.n1, e.n2]
+        for n in nodes:
+            if n != "0":
+                canon = f"v_{n}"
+                amap.setdefault(_norm_name(canon), canon)
+    for e in elements:
+        if e.kind == "m":
+            continue
+        for p in _ALIAS_PREFIXES:
+            canon = f"{p}_{e.name}"
+            amap.setdefault(_norm_name(canon), canon)
+    return amap
+
+
+def _canonicalize(expr, amap: Dict[str, str]):
+    """Rename free symbols in `expr` whose spelling aliases a canonical
+    answer name. Exact canonical spellings pass through unchanged."""
+    if not getattr(expr, "free_symbols", None):
+        return expr
+    subs = {}
+    for s in expr.free_symbols:
+        canon = amap.get(_norm_name(s.name))
+        if canon is not None and s.name != canon:
+            subs[s] = _sym(canon)
+    return expr.subs(subs) if subs else expr
+
+
 class Circuit:
     """Mutable working state while stamping a parsed element list.
 
@@ -97,6 +151,10 @@ class Circuit:
         self.unknowns: List[sp.Symbol] = []
         self.known: Dict[str, sp.Expr] = {}
         self._by_name: Dict[str, Element] = {e.name: e for e in elements}
+        # Built before the first _value call (the mutuals loop below
+        # parses values): every spelling of every answer name this
+        # circuit can produce, resolved to the canonical one.
+        self.alias_map: Dict[str, str] = _alias_map(elements)
 
         self.mutual_of: Dict[str, List[Tuple[str, sp.Expr]]] = {}
         for e in elements:
@@ -112,10 +170,13 @@ class Circuit:
         plain text like "4.7'u" or "2*v_2") into a SymPy expression: first
         expand any `'k`-style unit shorthand, then parse it through the
         restricted namespace in si_prefix.safe_sympify (so stray letters
-        like "Q" become plain symbols, not SymPy internals)."""
-        return safe_sympify(expand_value(raw, self.suffix),
+        like "Q" become plain symbols, not SymPy internals), then resolve
+        answer-name aliases: `0.5*ir1` means `0.5*i_r1`, calculator
+        style -- see _alias_map."""
+        expr = safe_sympify(expand_value(raw, self.suffix),
                             reserve_imaginary=self.reserve_imaginary,
                             original=self._typed_form.get(str(raw), str(raw)))
+        return _canonicalize(expr, self.alias_map)
 
     def v(self, node: str) -> sp.Expr:
         """Return the (symbolic) voltage at `node`, registering it as an
@@ -812,11 +873,16 @@ def solve_circuit_all(elements: List[Element], domain: str, omega=None,
 
     if unknowns:
         for name in unknowns:
-            sym = sp.Symbol(str(name))
+            # An unknown may be spelled calculator-style too: listing
+            # `re` as an unknown means `r_e` when there is a source e.
+            canon = circuit.alias_map.get(_norm_name(str(name)), str(name))
+            sym = sp.Symbol(canon)
             if sym not in circuit.unknowns:
                 circuit.unknowns.append(sym)
     if equations:
-        extra_eqs = [_parse_extra_equation(e, reserve_imaginary=reserve_imaginary)
+        extra_eqs = [_canonicalize(
+                         _parse_extra_equation(e, reserve_imaginary=reserve_imaginary),
+                         circuit.alias_map)
                      for e in equations]
         # Quantities recorded in `known` (a `j` source's current, a
         # capacitor's current in AC) are not solved for, so an equation
@@ -886,15 +952,19 @@ def solve_circuit_all(elements: List[Element], domain: str, omega=None,
             text = expand_shorthand(str(raw))
             rel = _parse_inequality(text, reserve_imaginary)
             if rel is not None:
-                filters.append((str(raw), rel))
+                filters.append((str(raw), _canonicalize(rel, circuit.alias_map)))
                 continue
             if "=" not in text:
                 raise CircuitError(
                     f"Condition '{raw}' must have the form name = value, "
                     f"or be an inequality such as name > 0.")
             lhs, rhs = text.split("=", 1)
-            subs_map[safe_sympify(lhs, reserve_imaginary=reserve_imaginary)] = \
-                safe_sympify(rhs, reserve_imaginary=reserve_imaginary)
+            lhs_expr = _canonicalize(
+                safe_sympify(lhs, reserve_imaginary=reserve_imaginary),
+                circuit.alias_map)
+            subs_map[lhs_expr] = _canonicalize(
+                safe_sympify(rhs, reserve_imaginary=reserve_imaginary),
+                circuit.alias_map)
         circuit.equations = [eq.subs(subs_map) for eq in circuit.equations]
         circuit.known = {k: safe_sympify(str(v), reserve_imaginary=reserve_imaginary).subs(subs_map)
                          for k, v in circuit.known.items()}
