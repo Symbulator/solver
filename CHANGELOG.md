@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.17 -- 28 Aug 2026
+
+### Changed
+- **A schematic op-amp's feedback wire leaves the tip the way the
+  triangle points.** 0.5.16's follower loop rose vertically out of the
+  tip vertex, which read wrong -- an op-amp's output exits in the
+  direction the symbol points. The loop now runs 16px out of the tip
+  before turning up, in both the corner-join and the occupied-row
+  paths; the join at the output node's own corner is unchanged.
+  Roberto's call, reviewing Bo2's Figure 6.23.
+
 ## 0.5.16 -- 28 Aug 2026
 
 ### Changed
