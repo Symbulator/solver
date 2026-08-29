@@ -193,6 +193,13 @@ def _fold(name: str) -> str:
     return name.replace("_", "").lower()
 
 
+
+def _typed(el) -> str:
+    """The element as the user wrote it: raw_fields when a rewrite
+    happened (so comments quote `[100,...]`, not the internal
+    `pr(100,...)`), fields otherwise."""
+    return el.name + "," + ",".join(el.raw_fields or el.fields)
+
 class _Skip(Exception):
     """A dependent source that cannot be translated; str() says why."""
 
@@ -456,7 +463,7 @@ def to_spice(desc: str) -> Tuple[str, List[str]]:
         return cand
 
     def skip(el, why: str) -> None:
-        lines.append(f"* {el.name},{','.join(el.fields)}  <- {why}")
+        lines.append(f"* {_typed(el)}  <- {why}")
         warnings.append(f"{el.name}: {why}")
 
     def emit_dependent(el, terms_v, terms_i, const) -> None:
@@ -474,7 +481,7 @@ def to_spice(desc: str) -> Tuple[str, List[str]]:
         sense = sense_name.get(el.name)
         multi = len(parts) > 1 or sense is not None
         if multi:
-            lines.append(f"* {el.name},{','.join(el.fields)}  expands to:")
+            lines.append(f"* {_typed(el)}  expands to:")
             what = (f"{len(parts)} SPICE elements in "
                     + ("series" if volts else "parallel"))
             warnings.append(f"{el.name}: translated as {what}"
@@ -575,7 +582,7 @@ def to_spice(desc: str) -> Tuple[str, List[str]]:
                 ratio = _spice_number(t2 / t1)
                 mid = inner_node(el.name, "s")
                 sense = unique("Vi_" + el.name)
-                lines.append(f"* {el.name},{','.join(el.fields)}  "
+                lines.append(f"* {_typed(el)}  "
                              f"expands to:")
                 lines.append(f"{unique('E' + el.name)} {mid} 0 "
                              f"{el.n1} 0 {ratio}")
@@ -608,7 +615,7 @@ def to_spice(desc: str) -> Tuple[str, List[str]]:
                 except _Skip as why:
                     skip(el, str(why))
                 else:
-                    lines.append(f"* {el.name},{','.join(el.fields)}  "
+                    lines.append(f"* {_typed(el)}  "
                                  f"expands to:")
                     ports = [(el.n1, el.n1), (el.n1, el.n2),
                              (el.n2, el.n1), (el.n2, el.n2)]
