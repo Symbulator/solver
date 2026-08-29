@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.20 -- 29 Aug 2026
+
+### Added
+- **SPICE netlist translation, both directions (#160).**
+  `to_spice(desc)` writes a Symbulator circuit description as a
+  generic ngspice-compatible netlist; `from_spice(text)` reads the
+  linear subset of one back. Both return `(text, warnings)`: an
+  element or value the destination cannot express is never
+  mistranslated -- it is kept as a `*` comment on export, dropped on
+  import, and named in the warnings either way. r/l/c (with initial
+  conditions as `IC=`), independent sources, the short circuit (a 0 V
+  source, SPICE's own idiom), mutual inductance (K, computed from
+  numeric inductances) and SPICE's E/G/F/H controlled sources all
+  translate; op-amps, ideal transformers, two-port blocks, symbolic
+  values, waveform sources and everything nonlinear warn instead.
+  The mega/milli trap is handled by construction: `1'M` exports as
+  `1MEG`, `1MEG`/`1M` import as `1'M`/`1'm`, and the exporter never
+  writes a bare `M` at all (milli becomes a plain decimal). Feeds
+  the app's SPICE Translator card.
+
+- **Element names must be identifier-safe (#159).** A name like
+  `r-x` used to parse, but referencing its current -- `2*i_r-x` --
+  silently read as `2*i_r - x` and solved to an answer full of
+  phantom symbols. `parse_circuit` now refuses such names with a
+  message saying why. The never-enforced `RESERVED_NAMES` set is
+  deleted; there are no reserved names.
+
+### Fixed
+- Stale `positive=True` wording in `Result.at()`'s docstring and the
+  package docstring: the time symbol has been
+  `Symbol("t", nonnegative=True)` since 0.5.11.
+
 ## 0.5.19 -- 28 Aug 2026
 
 ### Added

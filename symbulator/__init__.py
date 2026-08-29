@@ -20,9 +20,11 @@ inductance, ideal transformers, short circuits, and grounded two-port
     time_samples()      numeric (t, y) samples of a tr() result, for plotting
     bode_samples()      numeric (freq, mag_dB, phase_deg) samples of a fd()
                         result across a frequency sweep, for a Bode plot
+    to_spice(),         translate a circuit description to a SPICE netlist
+    from_spice()        and read the linear subset of one back
 
 Time-domain answers are written in `symbulator.t` (a SymPy symbol declared
-positive, which the inverse Laplace transform needs) and s-domain ones in
+nonnegative, which the Laplace transform pair needs) and s-domain ones in
 `symbulator.s`. Use those, or `Result.at(t=0.001)`, to substitute -- a
 freshly made `Symbol("t")` is a different symbol and will not match.
 
@@ -40,12 +42,13 @@ from .laplace import tr, t2s, s2t, t, s
 from .dispatch import ex
 from .plotting import time_samples, bode_samples, PlotError
 from .schematic import to_svg, draw
+from .spice import to_spice, from_spice
 
 #: The single source of truth for the version: pyproject.toml reads this
 #: attribute at build time, so the two cannot disagree.
-__version__ = "0.5.19"
+__version__ = "0.5.20"
 
 __all__ = ["dc", "ac", "fd", "tr", "t2s", "s2t", "t", "s", "pr", "pf", "gain", "th", "er", "port", "ex",
            "time_samples", "bode_samples", "PlotError",
-           "to_svg", "draw",
+           "to_svg", "draw", "to_spice", "from_spice",
            "AmbiguousValueError", "UnsafeExpressionError", "find_ambiguous_values", "__version__"]
