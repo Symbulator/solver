@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.22 -- 29 Aug 2026
+
+### Changed
+- **Brackets mean pr only in a resistor's value (#165).** `[...]` is
+  the parallel-resistor shorthand (in an `r` element's value) or a
+  two-port's parameter term; anywhere else it used to be silently
+  passed to `pr()` -- `e1,1,0,[4,4]` became a meaningless "2 V"
+  source, and on a capacitor it would have computed the *series*
+  combination -- and now stops with a message naming both legitimate
+  uses. Restores the calculator's scope, per Roberto. A `pr(...)`
+  the user types remains a function call, allowed anywhere; nested
+  brackets in a resistor value still work.
+
+- The README documents the case rule (names fold, `2*VR1` is
+  `2*v_r1`; free variables are case-sensitive, `c` is not `C`) and
+  the two-port parameter term; llms.txt carries both among its
+  easy-to-get-wrong notes.
+
 ## 0.5.21 -- 29 Aug 2026
 
 ### Added
