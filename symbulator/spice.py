@@ -21,12 +21,24 @@ What translates:
     j      -> I                  I (bare or DC value) -> j
     s      -> V...0 (0V source)  E/G (VCVS/VCCS) -> e/j with v_* value
     m      -> K (numeric L only) F/H (CCCS/CCVS) -> j/e with i_* value
-                                 K -> m (numeric L only)
+    dependent e/j -> E/G/F/H     K -> m (numeric L only)
+
+Dependent sources (#161): a value that is affine in node voltages,
+two-terminal element drops (`v_r1`) and element currents (`i_r1`), with
+numeric coefficients, becomes one SPICE element per term -- E/G for a
+voltage control, H/F for a current control, an independent V/I for a
+constant -- in series for a voltage source, in parallel for a current
+source. A current control on anything that is not already a voltage
+source gets a 0 V sensing source spliced into that element's branch
+(SPICE's own ammeter idiom); the current of an independent current
+source is its value and folds into the constant. All emitted elements
+are plain linear SPICE -- never behavioral/dialect-specific ones.
 
 Everything else -- the ideal op-amp `o`, the ideal transformer `t`, the
 two-port blocks `z/y/h/g/a/b`, SPICE's diodes/transistors/subcircuits,
-waveform sources (SIN/PULSE/PWL/...), and symbolic values on export --
-is reported in the warnings instead of being mistranslated.
+waveform sources (SIN/PULSE/PWL/...), symbolic values, and dependent
+values that are not affine with numeric coefficients -- is reported in
+the warnings instead of being mistranslated.
 
 Node names pass through unchanged apart from case folding; ground is `0`
 on both sides.
@@ -37,7 +49,7 @@ import math
 import re
 from typing import List, Optional, Tuple
 
-from .elements import parse_circuit, CircuitError
+from .elements import parse_circuit, CircuitError, TWO_PORT_KINDS
 from .si_prefix import safe_sympify
 
 # ---------------------------------------------------------------------------
@@ -147,6 +159,105 @@ def _numeric(expr_text: str) -> Optional[float]:
 # along. Kinds absent here have no SPICE counterpart.
 _KIND_TO_SPICE = {"r": "R", "l": "L", "c": "C", "e": "V", "j": "I"}
 
+#: Element kinds with two plain terminals -- the ones whose voltage drop
+#: (`v_r1`) can be rewritten as a node difference on export.
+_TWO_TERMINAL = ("r", "l", "c", "e", "j", "s")
+
+
+def _fold(name: str) -> str:
+    """The spelling-equivalence key: `i_r1`, `ir1` and `IR1` are one
+    name to the solver (0.5.19), so the exporter folds the same way."""
+    return name.replace("_", "").lower()
+
+
+class _Skip(Exception):
+    """A dependent source that cannot be translated; str() says why."""
+
+
+def _decompose(el, keys, by_name, numeric_vals):
+    """Read a dependent source's value as an affine expression over node
+    voltages and element currents.
+
+    Returns `(terms_v, terms_i, const)`: terms_v is a list of
+    `(node_a, node_b, coeff)` -- a `+k`/`-k` pair of node coefficients is
+    paired into one textbook difference, a lone node gets ground as its
+    partner -- terms_i is `(element_name, coeff)`, and const is the
+    plain-number remainder. The current of an independent current source
+    is its own value, so such a reference folds into const here rather
+    than becoming a term. Raises _Skip, with the reason, for anything
+    that is not affine with numeric coefficients."""
+    import sympy as sp
+    from sympy.solvers.solveset import linear_coeffs
+
+    expr = safe_sympify(el.value, reserve_imaginary=False)
+    vsyms: dict = {}   # node name -> Dummy
+    isyms: dict = {}   # element name -> Dummy
+    subs: dict = {}
+    # Sorted, so term order (and internal-node numbering) is stable
+    # from run to run -- free_symbols is a set.
+    for s in sorted(expr.free_symbols, key=lambda x: x.name):
+        meaning = keys.get(_fold(s.name))
+        if meaning is None:
+            raise _Skip(f"references '{s}', which names neither a node "
+                        f"voltage nor an element current; SPICE needs "
+                        f"numeric coefficients")
+        what, target = meaning
+        if what == "vnode":
+            subs[s] = (sp.Integer(0) if target == "0"
+                       else vsyms.setdefault(target, sp.Dummy(target)))
+        elif what == "vel":
+            el2 = by_name[target]
+            if el2.kind not in _TWO_TERMINAL:
+                raise _Skip(f"references the voltage of '{target}', "
+                            f"which is not a two-terminal element")
+            va = (sp.Integer(0) if el2.n1 == "0"
+                  else vsyms.setdefault(el2.n1, sp.Dummy(el2.n1)))
+            vb = (sp.Integer(0) if el2.n2 == "0"
+                  else vsyms.setdefault(el2.n2, sp.Dummy(el2.n2)))
+            subs[s] = va - vb
+        else:  # "iel"
+            el2 = by_name[target]
+            if el2.kind == "j" and numeric_vals.get(target) is not None:
+                # An independent current source's current IS its value.
+                subs[s] = sp.Float(numeric_vals[target])
+            else:
+                subs[s] = isyms.setdefault(target, sp.Dummy("i_" + target))
+
+    expr = expr.subs(subs)
+    dummies = list(vsyms.values()) + list(isyms.values())
+    try:
+        coeffs = linear_coeffs(expr, *dummies) if dummies else [expr]
+    except Exception:
+        raise _Skip("is not linear in its node voltages and element "
+                    "currents; SPICE's controlled sources are linear "
+                    "(E/G/F/H)")
+    const = coeffs[-1]
+    cv = list(zip(vsyms.keys(), coeffs[:len(vsyms)]))
+    ci = list(zip(isyms.keys(), coeffs[len(vsyms):len(vsyms) + len(isyms)]))
+    if not (const.is_number and all(c.is_number for _, c in cv + ci)):
+        raise _Skip("has a symbolic coefficient; SPICE needs numbers")
+
+    # Pair +k / -k node coefficients into one difference-controlled term.
+    live = [(n, c) for n, c in cv if c != 0]
+    terms_v, taken = [], set()
+    for i, (a, ca) in enumerate(live):
+        if i in taken:
+            continue
+        for j in range(i + 1, len(live)):
+            if j not in taken and sp.simplify(live[j][1] + ca) == 0:
+                # Orient the difference so the gain is positive.
+                if ca.is_negative:
+                    terms_v.append((live[j][0], a, -ca))
+                else:
+                    terms_v.append((a, live[j][0], ca))
+                taken.update((i, j))
+                break
+        else:
+            terms_v.append((a, "0", ca))
+            taken.add(i)
+    terms_i = [(n, c) for n, c in ci if c != 0]
+    return terms_v, terms_i, const
+
 
 def to_spice(desc: str) -> Tuple[str, List[str]]:
     """Translate a Symbulator circuit description to a SPICE netlist.
@@ -154,15 +265,93 @@ def to_spice(desc: str) -> Tuple[str, List[str]]:
     Returns `(netlist, warnings)`. Untranslatable elements are emitted
     as `*` comment lines and reported; the netlist always carries a
     title line and `.end`, so what does translate is ready to paste
-    into ngspice or LTspice."""
+    into ngspice or LTspice.
+
+    Dependent sources translate whenever their value is affine in node
+    voltages (`v_2`, or a two-terminal element's drop `v_r1`) and element
+    currents (`i_r1`), with numeric coefficients: each term becomes one
+    SPICE element -- E/G for a voltage control, H/F for a current
+    control, an independent V/I for a constant -- chained in series for
+    a voltage source and in parallel for a current source. A current
+    control on anything that is not already a voltage source gets a 0 V
+    sensing source spliced into that element's branch, which is SPICE's
+    own ammeter idiom. All of it stays plain linear SPICE -- no
+    behavioral/dialect-specific elements are ever emitted."""
     elements = parse_circuit(desc)  # raises CircuitError on bad input
     lines: List[str] = ["* Translated from Symbulator notation"]
     warnings: List[str] = []
     used_names = set()
+    by_name = {el.name: el for el in elements}
 
-    # Inductor values, for the mutual-inductance coupling factor.
-    l_values = {el.name: _numeric(el.value) for el in elements
+    node_set = set()
+    for el in elements:
+        if el.kind in _TWO_TERMINAL:
+            node_set.update((el.n1, el.n2))
+        elif el.kind == "o":
+            node_set.update(el.fields[0:3])
+        elif el.kind == "t" or el.kind in TWO_PORT_KINDS:
+            node_set.update(el.fields[0:2])
+
+    numeric_vals = {el.name: _numeric(el.value) for el in elements
+                    if el.kind in ("r", "l", "c", "e", "j", "m")}
+    l_values = {el.name: numeric_vals[el.name] for el in elements
                 if el.kind == "l"}
+
+    # What each spelling refers to: node voltages first (the primitive),
+    # then element drops and element currents.
+    keys: dict = {}
+    for node in node_set:
+        keys.setdefault(_fold("v" + node), ("vnode", node))
+    for el in elements:
+        keys.setdefault(_fold("v" + el.name), ("vel", el.name))
+        keys.setdefault(_fold("i" + el.name), ("iel", el.name))
+
+    # Decompose every dependent source up front.
+    deps: dict = {}   # name -> (terms_v, terms_i, const) | str reason
+    for el in elements:
+        if el.kind in ("e", "j") and numeric_vals[el.name] is None:
+            try:
+                deps[el.name] = _decompose(el, keys, by_name, numeric_vals)
+            except _Skip as why:
+                deps[el.name] = str(why)
+
+    # A current control is available when its element exports as (or
+    # can carry) a voltage source. Anything else poisons the source
+    # that references it -- and that can cascade.
+    def current_available(target: str) -> bool:
+        el2 = by_name[target]
+        if el2.kind == "s":
+            return True
+        if el2.kind in ("r", "l", "c"):
+            return numeric_vals[target] is not None
+        if el2.kind in ("e", "j"):
+            return (numeric_vals[target] is not None
+                    or isinstance(deps.get(target), tuple))
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for name, d in deps.items():
+            if isinstance(d, str):
+                continue
+            for target, _c in d[1]:
+                if not current_available(target):
+                    deps[name] = (f"references the current of '{target}', "
+                                  f"which does not translate to SPICE")
+                    changed = True
+                    break
+
+    # Which elements need a 0 V sensing source in their branch: any
+    # current-controlled target that is not already a voltage source.
+    sensed = set()
+    for name, d in deps.items():
+        if isinstance(d, tuple):
+            for target, _c in d[1]:
+                el2 = by_name[target]
+                if el2.kind in ("r", "l", "c", "j") or (
+                        el2.kind == "e" and numeric_vals[target] is None):
+                    sensed.add(target)
 
     def unique(name: str) -> str:
         base = name
@@ -173,39 +362,119 @@ def to_spice(desc: str) -> Tuple[str, List[str]]:
         used_names.add(name.lower())
         return name
 
+    # Names must exist before emission: an early H part may reference
+    # the sensing source of a later element. Sense names first, then
+    # each element's primary name, in circuit order.
+    sense_name = {t: unique("Vi_" + t) for t in sorted(sensed)}
+    primary: dict = {}
+    for el in elements:
+        if el.kind in _KIND_TO_SPICE and numeric_vals.get(el.name) is not None:
+            primary[el.name] = unique(_KIND_TO_SPICE[el.kind] + el.name[1:])
+        elif el.kind == "s":
+            primary[el.name] = unique("V" + el.name)
+        elif el.kind == "m":
+            primary[el.name] = unique("K" + el.name[1:])
+
+    def current_ref(target: str) -> str:
+        if target in sense_name:
+            return sense_name[target]
+        return primary[target]   # an independent e, or a short
+
+    def inner_node(base: str, tag) -> str:
+        cand = f"{base}_{tag}"
+        while cand in node_set:
+            cand += "x"
+        node_set.add(cand)
+        return cand
+
     def skip(el, why: str) -> None:
         lines.append(f"* {el.name},{','.join(el.fields)}  <- {why}")
         warnings.append(f"{el.name}: {why}")
 
+    def emit_dependent(el, terms_v, terms_i, const) -> None:
+        volts = el.kind == "e"          # series stack; else parallel set
+        base = el.name[1:]
+        parts = []                       # (letter, control_text, gain_or_value)
+        for a, b, c in terms_v:
+            parts.append(("E" if volts else "G", f"{a} {b}", float(c)))
+        for target, c in terms_i:
+            parts.append(("H" if volts else "F", current_ref(target),
+                          float(c)))
+        if const != 0 or not parts:
+            parts.append(("V" if volts else "I", None, float(const)))
+
+        sense = sense_name.get(el.name)
+        multi = len(parts) > 1 or sense is not None
+        if multi:
+            lines.append(f"* {el.name},{','.join(el.fields)}  expands to:")
+            what = (f"{len(parts)} SPICE elements in "
+                    + ("series" if volts else "parallel"))
+            warnings.append(f"{el.name}: translated as {what}"
+                            + (" plus its own current sense" if sense else ""))
+
+        def part_name(letter, i):
+            if len(parts) == 1 and sense is None:
+                return unique(letter + base)
+            return unique(letter + base + chr(97 + i))
+
+        if volts:
+            here = el.n1
+            stops = [inner_node(el.name, f"x{i + 1}")
+                     for i in range(len(parts) - 1)]
+            stops.append(inner_node(el.name, "s") if sense else el.n2)
+            for i, (letter, ctrl, val) in enumerate(parts):
+                nxt = stops[i]
+                mid = f"{ctrl} " if ctrl else ""
+                lines.append(f"{part_name(letter, i)} {here} {nxt} "
+                             f"{mid}{_spice_number(val)}")
+                here = nxt
+            if sense:
+                lines.append(f"{sense} {here} {el.n2} 0")
+        else:
+            far = inner_node(el.name, "s") if sense else el.n2
+            for i, (letter, ctrl, val) in enumerate(parts):
+                mid = f"{ctrl} " if ctrl else ""
+                lines.append(f"{part_name(letter, i)} {el.n1} {far} "
+                             f"{mid}{_spice_number(val)}")
+            if sense:
+                lines.append(f"{sense} {far} {el.n2} 0")
+
     for el in elements:
-        if el.kind in _KIND_TO_SPICE:
-            value = el.value
-            num = _numeric(value)
-            if num is None:
-                skip(el, "value '%s' is not a plain number; SPICE needs "
-                         "numeric values (dependent sources and symbolic "
-                         "values are not translated yet)" % value)
-                continue
-            name = unique(_KIND_TO_SPICE[el.kind] + el.name[1:])
-            line = f"{name} {el.n1} {el.n2} {_spice_number(num)}"
+        num = numeric_vals.get(el.name)
+        if el.kind in ("r", "l", "c") and num is None:
+            skip(el, f"value '{el.value}' is not a plain number; SPICE "
+                     f"needs numeric component values")
+        elif el.kind in _KIND_TO_SPICE and num is not None:
+            line_end = el.n2
+            if el.name in sensed:
+                line_end = inner_node(el.name, "s")
+            line = f"{primary[el.name]} {el.n1} {line_end} {_spice_number(num)}"
             if el.kind in ("l", "c"):
                 ic = _numeric(el.ic)
                 if ic:
                     line += f" IC={_spice_number(ic)}"
             lines.append(line)
+            if el.name in sensed:
+                lines.append(f"{sense_name[el.name]} {line_end} {el.n2} 0")
+        elif el.kind in ("e", "j"):    # dependent (num is None)
+            d = deps[el.name]
+            if isinstance(d, str):
+                skip(el, f"value '{el.value}' {d}" if d.startswith(("is", "has"))
+                     else d)
+            else:
+                emit_dependent(el, *d)
         elif el.kind == "s":
             # A 0 V source is SPICE's own idiom for a short (and its
             # ammeter). The name keeps the `s`: `s1` -> `Vs1`.
-            name = unique("V" + el.name)
-            lines.append(f"{name} {el.n1} {el.n2} 0")
+            lines.append(f"{primary[el.name]} {el.n1} {el.n2} 0")
         elif el.kind == "m":
             l1, l2 = el.fields[0], el.fields[1]
             v1, v2 = l_values.get(l1), l_values.get(l2)
-            mval = _numeric(el.fields[2])
+            mval = numeric_vals.get(el.name)
             if v1 and v2 and mval is not None:
                 k = mval / math.sqrt(v1 * v2)
-                name = unique("K" + el.name[1:])
-                lines.append(f"{name} L{l1[1:]} L{l2[1:]} {k:.6g}")
+                lines.append(f"{primary[el.name]} {primary[l1]} {primary[l2]} "
+                             f"{k:.6g}")
                 if k > 1:
                     warnings.append(
                         f"{el.name}: coupling factor came out {k:.4g} > 1 "

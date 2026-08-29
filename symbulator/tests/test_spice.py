@@ -64,9 +64,11 @@ def test_symbolic_value_warns_and_comments():
     assert "R2" not in net
 
 
-def test_dependent_source_warns():
+def test_dependent_source_translates_since_161():
+    # Under #160 this warned; #161 translates it to a VCVS instead.
     net, warns = to_spice("e1,1,0,5:r1,1,2,1'k:e2,3,0,2*v_2:r3,3,0,1'k")
-    assert any("e2" in w for w in warns)
+    assert "E2 3 0 2 0 2" in net
+    assert warns == []
 
 
 def test_opamp_and_twoport_warn():
@@ -174,3 +176,118 @@ def test_round_trip_with_ic_and_coupling():
     assert warns2 == []
     a, b = dc(original), dc(back)
     assert sp.simplify(a["v_2"] - b["v_2"]) == 0
+
+
+# --- Dependent sources, Symbulator -> SPICE (#161) -----------------------
+
+def _round_trip_matches(desc, checks):
+    """to_spice -> from_spice -> both circuits solve identically."""
+    net, _ = to_spice(desc)
+    back, _ = from_spice(net)
+    a, b = dc(desc), dc(back)
+    for key in checks:
+        assert sp.simplify(a[key] - b[key]) == 0, (key, a[key], b[key], net)
+
+
+def test_vcvs_single_node_control():
+    net, warns = to_spice("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:"
+                          "e2,3,0,2*v_2:r3,3,0,1'k")
+    assert "E2 3 0 2 0 2" in net
+    assert warns == []
+    _round_trip_matches("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:e2,3,0,2*v_2:r3,3,0,1'k",
+                        ["v_2", "v_3"])
+
+
+def test_vcvs_difference_pairs_into_one_element():
+    net, warns = to_spice("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:"
+                          "e2,3,0,4*(v_1 - v_2):r3,3,0,1'k")
+    assert "E2 3 0 1 2 4" in net
+    assert warns == []
+
+
+def test_element_drop_control():
+    # v_r2 is r2's drop = v(2) - 0, so the control is r2's own nodes.
+    net, warns = to_spice("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:"
+                          "e2,3,0,2*v_r2:r3,3,0,1'k")
+    assert "E2 3 0 2 0 2" in net
+    assert warns == []
+
+
+def test_vccs():
+    net, warns = to_spice("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:"
+                          "j2,0,3,0.005*v_2:r3,3,0,1'k")
+    assert "G2 0 3 2 0 0.005" in net
+    assert warns == []
+    _round_trip_matches("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:j2,0,3,0.005*v_2:r3,3,0,1'k",
+                        ["v_2", "v_3"])
+
+
+def test_cccs_on_a_source_current_references_it_directly():
+    desc = "e1,1,0,5:r1,1,0,1'k:j2,0,3,10*i_e1:r3,3,0,100"
+    net, warns = to_spice(desc)
+    assert "F2 0 3 V1 10" in net
+    assert warns == []
+    _round_trip_matches(desc, ["v_3"])
+
+
+def test_ccvs_on_a_resistor_splices_a_sense_source():
+    desc = "e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:e2,3,0,50*i_r1:r3,3,0,1'k"
+    net, warns = to_spice(desc)
+    assert "R1 1 r1_s 1K" in net
+    assert "Vi_r1 r1_s 2 0" in net
+    assert "H2 3 0 Vi_r1 50" in net
+    _round_trip_matches(desc, ["v_2", "v_3", "i_r1"])
+
+
+def test_affine_mix_expands_in_series():
+    desc = ("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:"
+            "e2,3,0,1 + 2*v_2 - 3000*i_r1:r3,3,0,1'k")
+    net, warns = to_spice(desc)
+    assert any("translated as 3 SPICE elements in series" in w for w in warns)
+    assert "e2_x1" in net and "e2_x2" in net
+    _round_trip_matches(desc, ["v_2", "v_3"])
+
+
+def test_current_of_independent_current_source_folds_to_constant():
+    desc = "j1,0,1,0.01:r1,1,0,1'k:e2,2,0,400*i_j1:r2,2,0,1'k"
+    net, warns = to_spice(desc)
+    assert "V2 2 0 4" in net         # 400 * 0.01, a plain constant
+    assert warns == []
+    _round_trip_matches(desc, ["v_1", "v_2"])
+
+
+def test_dependent_spelling_equivalence():
+    # ir1 means i_r1 to the solver, so the exporter reads it the same way.
+    desc = "e1,1,0,5:r1,1,0,1'k:e2,2,0,100*ir1:r3,2,0,1'k"
+    net, warns = to_spice(desc)
+    assert "H2 2 0 Vi_r1 100" in net
+    _round_trip_matches(desc, ["v_2"])
+
+
+def test_dependent_current_source_stack_is_parallel():
+    desc = ("e1,1,0,5:r1,1,2,1'k:r2,2,0,1'k:"
+            "j2,0,3,0.001*v_2 + 0.002*v_1:r3,3,0,1'k")
+    net, warns = to_spice(desc)
+    # Terms come out sorted by control-symbol name, so v_1's part first.
+    assert "G2a 0 3 1 0 0.002" in net
+    assert "G2b 0 3 2 0 0.001" in net
+    _round_trip_matches(desc, ["v_3"])
+
+
+def test_nonlinear_value_still_warns():
+    net, warns = to_spice("e1,1,0,5:r1,1,0,1'k:e2,2,0,v_1*i_r1:r2,2,0,1'k")
+    assert any("not linear" in w for w in warns)
+    assert "E2" not in net and "H2" not in net
+
+
+def test_symbolic_gain_still_warns():
+    # `k` names neither a node nor an element, so the whole source warns.
+    net, warns = to_spice("e1,1,0,5:r1,1,0,1'k:e2,2,0,k*v_1:r2,2,0,1'k")
+    assert any("references 'k'" in w for w in warns)
+
+
+def test_current_of_untranslatable_element_cascades():
+    # rx is symbolic, so i_rx is unavailable, so e2 must warn too.
+    net, warns = to_spice("e1,1,0,5:rx,1,0,rb:e2,2,0,5*i_rx:r2,2,0,1'k")
+    assert any(w.startswith("rx:") for w in warns)
+    assert any("current of 'rx'" in w for w in warns)

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.21 -- 29 Aug 2026
+
+### Added
+- **Dependent sources now translate to SPICE (#161).** `to_spice()`
+  reads a dependent source's value as an affine expression over node
+  voltages (`v_2`), two-terminal element drops (`v_r1`) and element
+  currents (`i_r1`) -- spelling equivalence included -- and emits one
+  plain linear SPICE element per term: E/G for a voltage control
+  (`+k`/`-k` node pairs fold into one textbook difference-controlled
+  element), H/F for a current control, an independent V/I for a
+  constant; terms chain in series for a voltage source and in
+  parallel for a current source. A current control on anything that
+  is not already a voltage source gets a 0 V sensing source spliced
+  into that element's branch -- SPICE's own ammeter idiom -- shared
+  across referencing sources, and working for chains of dependent
+  sources sensing each other. The current of an independent current
+  source is its value, so it folds into the constant instead. No
+  behavioral or dialect-specific elements are ever emitted. Values
+  that are not affine with numeric coefficients (nonlinear controls,
+  symbolic gains) warn exactly as before, and a reference to a
+  current that cannot translate poisons the referencing source with
+  a warning naming the culprit, cascading as far as it reaches.
+
+  Verified two independent ways: round trips through `from_spice()`
+  re-solved and compared, and -- because a symmetric sign flip would
+  cancel in a round trip -- every emitted netlist also runs through
+  `ahkab`, an independently implemented MNA simulator, node voltage
+  by node voltage (`test_spice_groundtruth.py`, self-skipping where
+  ahkab is unavailable). That harness caught and documented ahkab's
+  own quirk: its H senses with the opposite sign to its own F and to
+  the ngspice manual, which ngspice, LTspice and PSpice follow and
+  this exporter targets.
+
 ## 0.5.20 -- 29 Aug 2026
 
 ### Added
