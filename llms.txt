@@ -14,7 +14,7 @@ full before writing any circuit description — it's short, has copy-paste
 runnable examples for every analysis mode, and documents the full element
 syntax table (r/l/c/e/j/o/m/s/t/z/y/h/g/a/b).
 
-Two things worth knowing before you start, since they're easy to get wrong
+Three things worth knowing before you start, since they're easy to get wrong
 on the first try and don't always fail loudly:
 
 - Unit prefixes need an apostrophe: `1'k` means 1000 unambiguously; a bare
@@ -26,6 +26,11 @@ on the first try and don't always fail loudly:
   solve leaves some values symbolic instead of fully numeric, that almost
   always means a given fact wasn't fed in as an equation yet — check for
   one before assuming the circuit is underdetermined.
+- Time-domain answers use `Symbol("t", nonnegative=True)`; a bare
+  `Symbol("t")` is a different symbol to SymPy, so `.subs()` with one
+  silently does nothing. Use `res.at(t=...)` (substitutes by name), or
+  `from symbulator import t` and substitute with the package's own symbol —
+  see the README's "Working with the answers (SymPy)" section.
 
 ## Core docs
 

@@ -72,8 +72,8 @@ class Result:
         every expression evaluated.
 
         This is the safe route for the time symbol: `tr()` writes its
-        answers in Symbol("t", positive=True), and a bare Symbol("t") is a
-        different symbol that `.subs()` would silently ignore."""
+        answers in Symbol("t", nonnegative=True), and a bare Symbol("t") is
+        a different symbol that `.subs()` would silently ignore."""
         def sub(expr):
             if not isinstance(expr, sp.Basic):
                 return expr

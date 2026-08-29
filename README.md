@@ -14,7 +14,7 @@ simplified relative to the calculator version, and why.
 followed directly — the Quick start and Circuit description syntax
 sections below have everything needed to write a correct circuit
 description on the first try. See also [llms.txt](https://github.com/Symbulator/solver/blob/main/llms.txt) for a short
-index and the two syntax details that are easiest to get wrong.
+index and the three details that are easiest to get wrong.
 
 ## Install
 
@@ -209,6 +209,107 @@ integration short, an impulse response where a step response was meant.
 SymPy's own `laplace_transform` does the job, and 0.5.5 restored the
 behaviour the calculator versions have always had. A description written
 for Symbulator 7 or 8 now gives the same answer here.
+
+## Working with the answers (SymPy)
+
+Every answer is a SymPy expression — exact where the inputs were exact
+(the quick start's `res.v("2")` really is the rational `5/2`, not the
+float `2.5`) — so everything SymPy does applies to it directly:
+`float()`, `simplify()`, `.subs()`, `limit()`, `plot()`, `lambdify()`.
+
+```python
+import sympy as sp
+from symbulator import dc
+
+res = dc("e1,1,0,vin:r1,1,2,ra:r2,2,0,rb")
+sp.simplify(res.v("2"))          # rb*vin/(ra + rb)
+```
+
+**The one trap: the time symbol carries an assumption.** Time-domain
+answers are written in `Symbol("t", nonnegative=True)`. To SymPy, a
+bare `Symbol("t")` is a *different* symbol — same name, different
+assumptions — so substituting with one does nothing, and does it
+silently:
+
+```python
+from symbulator import tr, fd, t, s   # <- the package's own t and s
+
+res = tr("e1,1,0,5:r1,1,2,1000:c1,2,0,1e-6")
+res["v_2"]                            # 5.0 - 5.0*exp(-1000.0*t)
+
+res["v_2"].subs(sp.Symbol("t"), 0.001)   # unchanged — silently a no-op
+res["v_2"].subs(t, 0.001)                # 3.16060...
+res.at("v_2", t=0.001)                   # 3.16060... — same, by name
+```
+
+Two escapes, either fine: `res.at(...)` substitutes **by name**, so it
+can never miss (`res.at(t=0.001)` with no key returns a whole new
+`Result` evaluated at that instant); or import the package's own `t`
+and `s` symbols and use them wherever an expression leaves the package.
+Everything below uses the imported symbols.
+
+**Initial and final values** are a substitution and a limit:
+
+```python
+res["v_2"].subs(t, 0)                # 0 — starts from rest
+sp.limit(res["v_2"], t, sp.oo)       # 5 — settles at the source voltage
+
+# Same check on the s-domain answer, by the final-value theorem:
+resf = fd("e1,1,0,5/s:r1,1,2,1000:c1,2,0,1e-6")
+sp.limit(s * resf["v_2"], s, 0)      # 5
+```
+
+**Plotting a transient** works with SymPy's own `plot` — with the
+imported `t`, not a fresh `Symbol("t")`, or the curve comes out
+constant:
+
+```python
+sp.plot(res["v_2"], (t, 0, 0.005))
+```
+
+For anything beyond a quick look, `lambdify` turns an answer into a
+plain numeric function for NumPy/Matplotlib:
+
+```python
+import numpy as np
+f = sp.lambdify(t, res["v_2"], "numpy")
+f(np.linspace(0, 0.005, 400))        # ready to plot, fit, export...
+```
+
+**Frequency response needs `bode_samples()`, not `plot()`.** An `ac()`
+result is a phasor at one fixed `omega` — there is nothing in it to
+sweep — so the package samples the frequency axis for you, returning
+`(freq_hz, mag_db, phase_deg)` ready for any plotting library:
+
+```python
+from symbulator import bode_samples, time_samples
+
+freq, mag_db, phase = bode_samples(
+    "e1,1,0,1:r1,1,2,1000:c1,2,0,1e-6", "v_2", 10, 100_000)
+```
+
+Its twin `time_samples(desc, key, t_max)` samples a transient
+numerically — useful when the inverse Laplace transform of a
+complicated answer has no closed form and `tr()` leaves that variable
+out: the sampler sidesteps the symbolic inversion entirely.
+
+**A sign note on `pf()` at a source.** The package's convention is that
+`v_*`/`i_*` describe power *consumed* by an element, which is the wrong
+way round for reading a source's power factor as leading/lagging —
+negate the current first:
+
+```python
+from symbulator import ac, pf
+
+res = ac("e,1,0,30:r1,1,2,6:r2,2,0,-2j:r3,2,0,4",
+         omega=sp.Symbol("omega"), use_rms=True)
+pf(res["v_e"], -res["i_e"])          # pf: 0.97342 leading   — correct
+pf(res["v_e"],  res["i_e"])          # pf: 0.97342 lagging   — backwards
+```
+
+`pf()` takes raw values and cannot know whether they came from a source
+or a load, so it cannot do the flip for you (the calculator's version
+special-cased element *names* and could).
 
 ## Expert mode: `ex()`
 
