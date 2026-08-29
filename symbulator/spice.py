@@ -22,6 +22,11 @@ What translates:
     s      -> V...0 (0V source)  E/G (VCVS/VCCS) -> e/j with v_* value
     m      -> K (numeric L only) F/H (CCCS/CCVS) -> j/e with i_* value
     dependent e/j -> E/G/F/H     K -> m (numeric L only)
+    o      -> E with gain 1e9 (finite-gain stand-in, ~1e-9 rel. error)
+    t      -> E + 0V sense + F (the exact ideal-transformer pair)
+    z/y/h/g/a/b with a numeric [p11,p12,p21,p22] term
+           -> up to 4 grounded VCCS, via the engine's own admittance
+              reduction -- so every Symbulator element type exports
 
 Dependent sources (#161): a value that is affine in node voltages,
 two-terminal element drops (`v_r1`) and element currents (`i_r1`), with
@@ -34,11 +39,12 @@ source gets a 0 V sensing source spliced into that element's branch
 source is its value and folds into the constant. All emitted elements
 are plain linear SPICE -- never behavioral/dialect-specific ones.
 
-Everything else -- the ideal op-amp `o`, the ideal transformer `t`, the
-two-port blocks `z/y/h/g/a/b`, SPICE's diodes/transistors/subcircuits,
-waveform sources (SIN/PULSE/PWL/...), symbolic values, and dependent
-values that are not affine with numeric coefficients -- is reported in
-the warnings instead of being mistranslated.
+What still warns instead of translating: symbolic values anywhere
+(SPICE needs numbers), dependent values that are not affine with
+numeric coefficients, two-ports without a numeric parameter term or
+with a set that is singular in admittance form, and -- on import only --
+SPICE's diodes/transistors/subcircuits and waveform sources
+(SIN/PULSE/PWL/...). Nothing is ever mistranslated silently.
 
 Node names pass through unchanged apart from case folding; ground is `0`
 on both sides.
@@ -49,7 +55,8 @@ import math
 import re
 from typing import List, Optional, Tuple
 
-from .elements import parse_circuit, CircuitError, TWO_PORT_KINDS
+from .elements import (parse_circuit, CircuitError, TWO_PORT_KINDS,
+                       two_port_param_texts)
 from .si_prefix import safe_sympify
 
 # ---------------------------------------------------------------------------
@@ -84,6 +91,20 @@ _NUM_RE = re.compile(
 )
 
 
+def _exact(value: float, spec: str = "g") -> str:
+    """The shortest decimal that reads back as exactly `value`: try 6
+    then 12 significant digits, fall back to repr (which Python already
+    guarantees round-trips). Six digits are plenty for values a person
+    typed; a *computed* gain (an admittance coefficient, a turns ratio)
+    truncated to six would shift every solved voltage at the 1e-6 level
+    -- measured, not hypothetical."""
+    for digits in (6, 12):
+        text = f"{value:.{digits}{spec}}"
+        if float(text) == value:
+            return text
+    return repr(value)
+
+
 def _spice_number(value: float) -> str:
     """Format a float the way a SPICE reader expects: a suffix when one
     fits cleanly, plain decimal for near-unit values, e-notation
@@ -93,14 +114,15 @@ def _spice_number(value: float) -> str:
     if value == 0:
         return "0"
     if 0.001 <= abs(value) < 1000:
-        return f"{value:.6g}"
+        return _exact(value)
     exp = math.floor(math.log10(abs(value)) / 3) * 3
     if exp in _SPICE_SUFFIX and exp != -3:
         mant = value / 10 ** exp
-        text = f"{mant:.6g}"
-        if "e" not in text and "E" not in text:
+        text = _exact(mant)
+        if ("e" not in text and "E" not in text
+                and float(text) * 10 ** exp == value):
             return f"{text}{_SPICE_SUFFIX[exp]}"
-    return f"{value:.6g}"
+    return _exact(value)
 
 
 def _parse_spice_number(token: str) -> Optional[float]:
@@ -124,14 +146,15 @@ def _symb_number(value: float) -> str:
     if value == 0:
         return "0"
     if 0.01 <= abs(value) < 1000:
-        return f"{value:.6g}"
+        return _exact(value)
     exp = math.floor(math.log10(abs(value)) / 3) * 3
     if exp in _SYMB_PREFIX:
         mant = value / 10 ** exp
-        text = f"{mant:.6g}"
-        if "e" not in text and "E" not in text:
+        text = _exact(mant)
+        if ("e" not in text and "E" not in text
+                and float(text) * 10 ** exp == value):
             return f"{text}'{_SYMB_PREFIX[exp]}"
-    return f"{value:.6g}"
+    return _exact(value)
 
 
 def _numeric(expr_text: str) -> Optional[float]:
@@ -172,6 +195,51 @@ def _fold(name: str) -> str:
 
 class _Skip(Exception):
     """A dependent source that cannot be translated; str() says why."""
+
+
+def _two_port_admittance(kind, p11, p12, p21, p22):
+    """The admittance-form coefficients (A, B, C, D) of a two-port
+    parameter set: i1 = A*v1 + B*v2, i2 = C*v1 + D*v2, with i1/i2 the
+    currents leaving each port node into the block. The i1/i2 formulas
+    are the engine's own (`engine._stamp_two_port`), transcribed
+    verbatim, so the exporter cannot disagree with the solver about
+    what a parameter set means. Raises _Skip for a set that is
+    singular in admittance form -- the same sets the solver itself
+    cannot substitute numbers into."""
+    import sympy as sp
+    from sympy.solvers.solveset import linear_coeffs
+
+    v1, v2 = sp.Dummy("v1"), sp.Dummy("v2")
+    p11, p12, p21, p22 = (sp.Float(p) for p in (p11, p12, p21, p22))
+    try:
+        if kind == "z":
+            det = p11 * p22 - p12 * p21
+            i1 = (p22 * v1 - p12 * v2) / det
+            i2 = (p11 * v2 - p21 * v1) / det
+        elif kind == "y":
+            i1 = p11 * v1 + p12 * v2
+            i2 = p21 * v1 + p22 * v2
+        elif kind == "h":
+            i1 = (v1 - p12 * v2) / p11
+            i2 = p22 * v2 - p21 * ((p12 * v2 - v1) / p11)
+        elif kind == "g":
+            det = p11 * p22 - p12 * p21
+            i1 = (det / p22) * v1 + (p12 / p22) * v2
+            i2 = (-p21 / p22) * v1 + (1 / p22) * v2
+        elif kind == "a":
+            i1 = (-p11 * p22 * v2 + p12 * p21 * v2 + p22 * v1) / p12
+            i2 = (p11 * v2 - v1) / p12
+        else:  # "b"
+            i1 = (p11 / p12) * v1 + (-1 / p12) * v2
+            i2 = (-(p11 * p22 - p12 * p21) / p12) * v1 + (p22 / p12) * v2
+        a, b, _c0 = linear_coeffs(sp.expand(i1), v1, v2)
+        c, d, _c1 = linear_coeffs(sp.expand(i2), v1, v2)
+        return float(a), float(b), float(c), float(d)
+    except (ZeroDivisionError, TypeError, ValueError):
+        raise _Skip(f"this {kind}-parameter set is singular in "
+                    f"admittance form and cannot be realised as "
+                    f"conductances (the solver cannot substitute "
+                    f"numbers into it either)")
 
 
 def _decompose(el, keys, by_name, numeric_vals):
@@ -474,7 +542,7 @@ def to_spice(desc: str) -> Tuple[str, List[str]]:
             if v1 and v2 and mval is not None:
                 k = mval / math.sqrt(v1 * v2)
                 lines.append(f"{primary[el.name]} {primary[l1]} {primary[l2]} "
-                             f"{k:.6g}")
+                             f"{_exact(k)}")
                 if k > 1:
                     warnings.append(
                         f"{el.name}: coupling factor came out {k:.4g} > 1 "
@@ -484,11 +552,78 @@ def to_spice(desc: str) -> Tuple[str, List[str]]:
                          "and both inductors to compute SPICE's coupling "
                          "factor k")
         elif el.kind == "o":
-            skip(el, "ideal op-amp has no SPICE primitive")
+            # SPICE has no ideal op-amp; the universal idiom is a huge-
+            # gain VCVS. At 1e9 the finite-gain error is parts-per-
+            # billion -- but it is an approximation, so say so.
+            nplus, nminus, nout = el.fields[0], el.fields[1], el.fields[2]
+            lines.append(f"{unique('E' + el.name)} {nout} 0 "
+                         f"{nplus} {nminus} 1G")
+            warnings.append(
+                f"{el.name}: translated as a voltage-controlled source "
+                f"with gain 1e9 -- a finite-gain stand-in for the ideal "
+                f"op-amp")
         elif el.kind == "t":
-            skip(el, "ideal transformer has no SPICE primitive")
+            # The exact ideal transformer (grounded ports, as on the
+            # calculator): a VCVS forces the secondary voltage at the
+            # turns ratio, a 0 V source senses the secondary current,
+            # and a CCCS reflects it into the primary. Exact at DC, AC
+            # and transient alike -- unlike the coupled-inductor
+            # approximation, which shorts out at DC.
+            t1 = _numeric(el.fields[2])
+            t2 = _numeric(el.fields[3])
+            if t1 and t2:
+                ratio = _spice_number(t2 / t1)
+                mid = inner_node(el.name, "s")
+                sense = unique("Vi_" + el.name)
+                lines.append(f"* {el.name},{','.join(el.fields)}  "
+                             f"expands to:")
+                lines.append(f"{unique('E' + el.name)} {mid} 0 "
+                             f"{el.n1} 0 {ratio}")
+                lines.append(f"{sense} {mid} {el.n2} 0")
+                lines.append(f"{unique('F' + el.name)} {el.n1} 0 "
+                             f"{sense} {ratio}")
+                warnings.append(
+                    f"{el.name}: translated exactly as a controlled-"
+                    f"source pair with a current sense (3 elements)")
+            else:
+                skip(el, "ideal transformer needs numeric turns to "
+                         "compute the ratio")
         else:  # two-port blocks z/y/h/g/a/b
-            skip(el, "two-port block has no SPICE equivalent")
+            texts = two_port_param_texts(el)
+            vals = [_numeric(t) for t in texts] if texts else None
+            if vals is None:
+                skip(el, "two-port block without numeric parameters; give "
+                         "them in the description as a fourth term, "
+                         "[p11,p12,p21,p22]")
+            elif any(v is None for v in vals):
+                bad = [t for t, v in zip(texts, vals) if v is None]
+                skip(el, f"two-port parameter '{bad[0]}' is not a plain "
+                         f"number; SPICE needs numeric parameters")
+            else:
+                # Any parameter set reduces to admittance form -- the
+                # engine's own reduction -- so the block is (up to) four
+                # grounded VCCS elements, two per port.
+                try:
+                    coeffs = _two_port_admittance(el.kind, *vals)
+                except _Skip as why:
+                    skip(el, str(why))
+                else:
+                    lines.append(f"* {el.name},{','.join(el.fields)}  "
+                                 f"expands to:")
+                    ports = [(el.n1, el.n1), (el.n1, el.n2),
+                             (el.n2, el.n1), (el.n2, el.n2)]
+                    count = 0
+                    for (out, ctrl), coeff, suf in zip(ports, coeffs,
+                                                       "abcd"):
+                        if coeff == 0:
+                            continue
+                        lines.append(f"{unique('G' + el.name + suf)} "
+                                     f"{out} 0 {ctrl} 0 "
+                                     f"{_spice_number(coeff)}")
+                        count += 1
+                    warnings.append(
+                        f"{el.name}: translated as {count} grounded "
+                        f"conductance-form controlled sources")
 
     lines.append(".end")
     return "\n".join(lines), warnings
@@ -665,7 +800,7 @@ def _element_from_spice(tokens: List[str], l_values: dict,
             return None
         name = ("e" if kind == "e" else "j") + _NAME_OK.sub("_", head.lower())
         ctrl = _diff(tokens[3].lower(), tokens[4].lower())
-        return f"{name},{tokens[1].lower()},{tokens[2].lower()},{gain:.6g}*{ctrl}"
+        return f"{name},{tokens[1].lower()},{tokens[2].lower()},{_exact(gain)}*{ctrl}"
 
     if kind in ("f", "h") and len(tokens) >= 5:
         # CCCS / CCVS: name n+ n- Vsource gain. Same naming rule:
@@ -678,7 +813,7 @@ def _element_from_spice(tokens: List[str], l_values: dict,
             return None
         name = ("j" if kind == "f" else "e") + _NAME_OK.sub("_", head.lower())
         ctrl = "i_" + _symb_name(vname, "e")
-        return f"{name},{tokens[1].lower()},{tokens[2].lower()},{gain:.6g}*{ctrl}"
+        return f"{name},{tokens[1].lower()},{tokens[2].lower()},{_exact(gain)}*{ctrl}"
 
     if kind == "k" and len(tokens) >= 4:
         kval = _parse_spice_number(tokens[3])

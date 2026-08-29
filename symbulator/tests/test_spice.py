@@ -71,11 +71,62 @@ def test_dependent_source_translates_since_161():
     assert warns == []
 
 
-def test_opamp_and_twoport_warn():
-    net, warns = to_spice("e1,1,0,5:r1,1,2,1:o1,0,2,3:r2,2,3,2")
-    assert any("op-amp" in w for w in warns)
-    _, warns = to_spice("e1,1,0,10:y1,1,2:rl,2,0,1'k")
-    assert any("two-port" in w for w in warns)
+def test_parameterless_twoport_warns():
+    # Without a parameter term there is nothing numeric to realise.
+    net, warns = to_spice("e1,1,0,10:y1,1,2:rl,2,0,1'k")
+    assert any("without numeric parameters" in w for w in warns)
+
+
+# --- Op-amp, transformer, two-ports -> SPICE (#162) ----------------------
+
+def test_opamp_becomes_huge_gain_vcvs():
+    desc = "e1,1,0,1:r1,1,2,1'k:r2,2,3,2'k:o1,0,2,3"
+    net, warns = to_spice(desc)
+    assert "Eo1 3 0 0 2 1G" in net
+    assert any("finite-gain" in w for w in warns)
+    # Round trip: the finite gain makes the answers approximate, so
+    # compare numerically rather than symbolically.
+    back, _ = from_spice(net)
+    a, b = dc(desc), dc(back)
+    assert a["v_3"] == -2
+    assert abs(float(b["v_3"]) - (-2)) < 1e-6
+
+
+def test_ideal_transformer_exact_pair():
+    desc = "e1,1,0,10:r0,1,2,1:t1,2,3,2,1:r1,3,0,100"
+    net, warns = to_spice(desc)
+    assert "Et1 t1_s 0 2 0 0.5" in net
+    assert "Vi_t1 t1_s 3 0" in net
+    assert "Ft1 2 0 Vi_t1 0.5" in net
+    # This realisation is exact, DC included -- the answers round-trip
+    # symbolically equal.
+    back, _ = from_spice(net)
+    a, b = dc(desc), dc(back)
+    for key in ("v_2", "v_3", "i_r0", "i_r1"):
+        assert sp.simplify(a[key] - b[key]) == 0
+
+
+def test_transformer_symbolic_turns_warn():
+    net, warns = to_spice("e1,1,0,10:t1,1,2,n,1:r1,2,0,100")
+    assert any("numeric turns" in w for w in warns)
+
+
+def test_twoport_with_parameters_becomes_conductances():
+    desc = "e1,1,0,10:z,1,2,[100,10,20,50]:rl,2,0,200"
+    net, warns = to_spice(desc)
+    assert any("conductance-form" in w for w in warns)
+    # Round trip through from_spice solves identically: the G elements
+    # encode the same admittance reduction the engine itself uses.
+    back, _ = from_spice(net)
+    a, b = dc(desc), dc(back)
+    for key in ("v_1", "v_2"):
+        assert abs(float(a[key]) - float(b[key])) < 1e-9 * max(
+            1, abs(float(a[key])))
+
+
+def test_twoport_symbolic_parameters_warn():
+    net, warns = to_spice("e1,1,0,10:z,1,2,[za,10,20,zb]:rl,2,0,200")
+    assert any("not a plain number" in w for w in warns)
 
 
 # --- SPICE -> Symbulator -------------------------------------------------

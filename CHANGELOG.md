@@ -3,6 +3,43 @@
 ## 0.5.21 -- 29 Aug 2026
 
 ### Added
+- **Two-port parameters in the description (#163).** A two-port
+  element takes an optional last term listing its four parameters:
+  `z,1,2,[100,10,20,50]`. Entries are numbers, SI-prefixed values or
+  expressions; each binds its correspondingly-named variable
+  (`z11`...) through the same substitution machinery as
+  `conditions=`, so the values are visible to expert equations and
+  ride into solved answers -- the calculator's "store the values in
+  the variables first", made part of the circuit text. Without the
+  term the parameters stay free symbols (the tacit
+  `[<name>11,...,<name>22]`), exactly as before; an explicit
+  condition on the same name overrides the term; the `params=` dict
+  still works. There is no clash with the `[a,b]` parallel shorthand:
+  two-port elements have no value field where a parallel combination
+  could appear, and the internal `pr(...)` encoding disambiguates by
+  element kind. The app's Define field now reaches two-port
+  parameters too (`symbulator_ui.expand_defines_in_desc` materialises
+  the tacit term when a define names one of its entries).
+
+- **Every element type now exports to SPICE (#162).** The ideal
+  op-amp becomes a gain-1e9 VCVS (the universal SPICE idiom;
+  parts-per-billion finite-gain error, and the warning says so). The
+  ideal transformer becomes its *exact* realization -- a VCVS at the
+  turns ratio, a 0 V current sense, and a CCCS reflecting the
+  secondary current into the primary -- correct at DC, unlike the
+  coupled-inductor approximation. A two-port block with a numeric
+  parameter term becomes up to four grounded VCCS elements via the
+  engine's own admittance reduction, transcribed verbatim so exporter
+  and solver cannot disagree; parameter sets singular in admittance
+  form warn. All verified against the independent simulator per node
+  voltage, alongside the #161 cases.
+
+### Fixed
+- Numbers computed by the SPICE exporter (admittance coefficients,
+  turns ratios, coupling factors) are now written with round-trip
+  precision instead of 6 significant digits, which shifted solved
+  voltages at the 1e-6 level. Values a person typed keep their short
+  spelling.
 - **Dependent sources now translate to SPICE (#161).** `to_spice()`
   reads a dependent source's value as an affine expression over node
   voltages (`v_2`), two-terminal element drops (`v_r1`) and element

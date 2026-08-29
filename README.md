@@ -65,7 +65,7 @@ separated by `:`, fields within an element by `,`. Node `0` is ground.
 | `m` | mutual inductance | name,Lname1,Lname2,M |
 | `s` | short circuit | name,n1,n2 |
 | `t` | ideal transformer | name,n1,n2,turns1,turns2 |
-| `z,y,h,g,a,b` | grounded two-port block | name,n1,n2 (params passed separately, see below) |
+| `z,y,h,g,a,b` | grounded two-port block | name,n1,n2[,[p11,p12,p21,p22]] |
 
 The optional initial-condition field on `l`/`c` (initial inductor
 current / capacitor voltage) is only meaningful for `fd()`/`tr()`; it's
@@ -89,19 +89,31 @@ such value; pass `suffix="si"` to read them all as SI units, or
 `find_ambiguous_values(desc)` to scan a description without solving --
 that's what the web front end uses to ask the user interactively.
 
-**Two-port parameters** (`z/y/h/g/a/b`) are supplied via a `params`
-dict, since on the calculator they were either predefined variables or
-entered interactively:
+**Two-port parameters** (`z/y/h/g/a/b`) ride in the description as an
+optional last term, a four-entry list:
+
+```python
+res = dc("e1,1,0,10:y1,1,2,[0.001,-0.001,-0.001,0.001]:rl,2,0,1'k")
+```
+
+Entries may be numbers, SI-prefixed values or expressions (symbols
+included); each binds the correspondingly-named variable (`y11`,
+`y12`, ... for an element named `y`; `y111`, ... for one named `y1` --
+the element's name prefixes the digits) through the same substitution
+machinery as `conditions=`, so an explicit condition on the same name
+still overrides the description. Without the term, the parameters are
+free symbols of those names -- the tacit term `[y111,y112,y121,y122]`
+-- matching the original's "leave them symbolic" default, and they can
+be pinned via `conditions=` or the older `params` dict, which is still
+accepted:
 
 ```python
 params = {"y1": {"11": "0.001", "12": "-0.001", "21": "-0.001", "22": "0.001"}}
 res = dc("e1,1,0,10:y1,1,2:rl,2,0,1'k", params=params)
 ```
 
-If an element's params are omitted, they're left as free symbols named
-`<name>11`, `<name>12`, etc. (matching the original's "leave them
-symbolic" default). Use `port()` (below) to go the other way and
-*extract* z/y/h/g/a/b parameters from an actual sub-circuit.
+Use `port()` (below) to go the other way and *extract* z/y/h/g/a/b
+parameters from an actual sub-circuit.
 
 ## DC / AC / s-domain results
 

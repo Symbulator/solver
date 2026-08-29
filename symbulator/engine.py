@@ -945,6 +945,17 @@ def solve_circuit_all(elements: List[Element], domain: str, omega=None,
     # only place it can act: a quadratic constraint yields its
     # sign-symmetric solution pairs regardless, and the inequality is
     # what picks among them.
+    # A two-port's parameter term (`z,1,2,[100,0,0,50]`, #163) is the
+    # calculator's "store the values in the variables first" made part
+    # of the description: each entry binds its parameter symbol through
+    # the same conditions machinery as the `|` operator. They go FIRST,
+    # so an explicit user condition on the same name still wins -- the
+    # dict below keeps the last entry per symbol.
+    from .elements import two_port_param_conditions
+    auto_conds = two_port_param_conditions(elements)
+    if auto_conds:
+        conditions = auto_conds + list(conditions or [])
+
     filters: List[Tuple[str, sp.Rel]] = []
     if conditions:
         subs_map = {}

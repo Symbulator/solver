@@ -238,13 +238,23 @@ def parse_circuit(desc: str, expand_si: bool = True) -> List[Element]:
         seen_names.add(name)
 
         expected = FIELD_COUNTS[kind]
-        allowed = {expected, expected + 1} if kind in OPTIONAL_IC_KINDS else {expected}
+        if kind in OPTIONAL_IC_KINDS or kind in TWO_PORT_KINDS:
+            allowed = {expected, expected + 1}
+        else:
+            allowed = {expected}
         if len(parts) not in allowed:
             if kind in OPTIONAL_IC_KINDS:
                 raise CircuitError(
                     f"Your description of element '{name}' has {len(parts)} terms. "
                     f"{expected} or {expected + 1} (with an initial condition) terms are "
                     f"expected for an element of type '{kind}'."
+                )
+            if kind in TWO_PORT_KINDS:
+                raise CircuitError(
+                    f"Your description of element '{name}' has {len(parts)} terms. "
+                    f"{expected} terms are expected for a two-port element, or "
+                    f"{expected + 1} with its parameters as the last term: "
+                    f"[p11,p12,p21,p22]."
                 )
             raise CircuitError(
                 f"Your description of element '{name}' has {len(parts)} terms. "
@@ -262,11 +272,82 @@ def parse_circuit(desc: str, expand_si: bool = True) -> List[Element]:
         raw_fields = (list(typed_parts[1:])
                       if typed != raw and len(typed_parts) == len(parts)
                       else [])
-        elements.append(Element(name=name, kind=kind, fields=fields,
-                                raw_fields=raw_fields))
+        element = Element(name=name, kind=kind, fields=fields,
+                          raw_fields=raw_fields)
+        if kind in TWO_PORT_KINDS and len(fields) == 3:
+            two_port_param_texts(element)   # validates; raises if malformed
+        elements.append(element)
 
     _validate_topology(elements)
     return elements
+
+
+def two_port_param_texts(el: Element) -> Optional[List[str]]:
+    """The four parameter expressions from a two-port element's optional
+    last term, or None when the element carries only its two nodes.
+
+    The term is written `[p11,p12,p21,p22]`; by the time fields exist,
+    `expand_shorthand` has rewritten the brackets to `pr(...)` (its
+    universal internal encoding of `[...]`), which is also accepted
+    typed directly. Raises CircuitError when the term is not a
+    four-entry list."""
+    if el.kind not in TWO_PORT_KINDS or len(el.fields) < 3:
+        return None
+    text = el.fields[2].strip()
+    shown = (el.raw_fields[2].strip()
+             if len(el.raw_fields) > 2 else text)
+    if not (text.startswith("pr(") and text.endswith(")")):
+        raise CircuitError(
+            f"The last term of two-port '{el.name}' is '{shown}'. A "
+            f"two-port's parameters are written as a four-entry list: "
+            f"[p11,p12,p21,p22]."
+        )
+    inner = text[3:-1]
+    parts: List[str] = []
+    depth, current = 0, ""
+    for ch in inner:
+        if ch == "(":
+            depth += 1
+            current += ch
+        elif ch == ")":
+            depth -= 1
+            current += ch
+        elif ch == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    parts.append(current.strip())
+    if len(parts) != 4 or any(p == "" for p in parts):
+        raise CircuitError(
+            f"The parameter list of two-port '{el.name}' has "
+            f"{len([p for p in parts if p])} entries. Exactly four are "
+            f"expected: [p11,p12,p21,p22]."
+        )
+    return parts
+
+
+def two_port_param_conditions(elements: List[Element]) -> List[str]:
+    """The `name = value` bindings implied by every two-port parameter
+    term in `elements`, ready to run through the solver's conditions
+    machinery -- which is what "the values are stored in the parameter
+    variables" means operationally: the same substitution the TI's `|`
+    operator applied to stored variables.
+
+    A self-referential entry (`z,1,2,[z11,z12,z21,z22]` -- the tacit
+    default written out) binds nothing: the parameter is already the
+    free symbol it names."""
+    conds: List[str] = []
+    for el in elements:
+        texts = two_port_param_texts(el)
+        if not texts:
+            continue
+        for ij, text in zip(("11", "12", "21", "22"), texts):
+            name = f"{el.name}{ij}"
+            if text.replace("_", "").lower() == name.replace("_", "").lower():
+                continue
+            conds.append(f"{name} = {text}")
+    return conds
 
 
 def _validate_topology(elements: List[Element], two_port_nodes: Optional[tuple] = None) -> None:
