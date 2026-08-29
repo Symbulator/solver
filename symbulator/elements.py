@@ -66,12 +66,6 @@ OPTIONAL_IC_KINDS = {"l", "c"}
 TWO_PORT_KINDS = set("zyghab")
 GROUNDED_ELEMENT_KINDS = set("tzyghab")  # neither node may be "0"
 
-RESERVED_NAMES = {
-    "aa", "about", "ac", "dc", "er", "ex", "fd", "gain", "only",
-    "s2t", "t2s", "sin", "th", "tr", "pr", "pf",
-}
-
-
 class CircuitError(ValueError):
     """Raised for any issue found while parsing/validating a circuit."""
 
@@ -221,6 +215,22 @@ def parse_circuit(desc: str, expand_si: bool = True) -> List[Element]:
             raise CircuitError(
                 f"Element starting with '{kind}' not recognised. "
                 f"Give element '{parts[0]}' a proper name."
+            )
+
+        # A name must survive being embedded in a symbol: the answers are
+        # written as i_<name>, v_<name>, p_<name>, and a reader must be
+        # able to type those inside a value or an added equation. A name
+        # like `r-x` parses fine on its own, but `2*i_r-x` silently reads
+        # as `2*i_r - x` and solves to an answer full of phantom symbols
+        # -- so the characters that would do that are refused here, where
+        # the message can still point at the right element.
+        if not name.isidentifier():
+            raise CircuitError(
+                f"Element name '{parts[0]}' contains a character that "
+                f"cannot be part of a name. Use letters, digits and "
+                f"underscores, so that the element's answers (its "
+                f"'i_...', 'v_...', 'p_...') can be written inside a "
+                f"value or an added equation."
             )
 
         if name in seen_names:

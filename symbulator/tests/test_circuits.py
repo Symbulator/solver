@@ -253,6 +253,23 @@ def test_parser_rejects_wrong_field_count():
         dc("e1,1,0,5,99:r1,1,0,1'k")
 
 
+def test_parser_rejects_names_that_break_expressions():
+    # A hyphen, dot or space in a name would make i_<name> unwritable
+    # inside a value or equation (`2*i_r-x` reads as `2*i_r - x`), so
+    # the parser refuses the name outright, quoting it as typed.
+    for bad in ("r-x", "r.1", "r x"):
+        with pytest.raises(CircuitError, match="cannot be part of a name"):
+            dc(f"e1,1,0,5:{bad},1,2,1'k:r2,2,0,1'k")
+
+
+def test_parser_accepts_plain_names():
+    # The rule must not cost anything it is not aimed at: a bare `r`,
+    # digits, underscores and long names all still solve.
+    for good in ("r", "r0", "r_1", "ris", "rlongname99"):
+        res = dc(f"e1,1,0,5:{good},1,2,1'k:r2,2,0,1'k")
+        assert res.i(good) == sp.Rational(1, 400)
+
+
 def test_thevenin_style_two_source_dc():
     # Two sources feeding a common resistor node -- solved independently
     # via superposition by hand:
