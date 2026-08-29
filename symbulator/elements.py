@@ -152,19 +152,23 @@ def _split_elements(desc: str) -> List[str]:
 
 def _split_fields(raw: str) -> List[str]:
     """Split one element's raw text on `,` into fields, the way
-    `str.split(",")` does -- except a comma inside parentheses doesn't
-    count as a separator. Needed because the `[...]` parallel-impedance
-    shortcut (see si_prefix.expand_shorthand) has already been expanded
-    to `pr(a,b,c)` by the time this runs, and those inner commas belong
-    to the value field, not the element's field list."""
+    `str.split(",")` does -- except a comma inside parentheses or
+    square brackets doesn't count as a separator. Parentheses because
+    the `[...]` parallel-impedance shortcut (see
+    si_prefix.expand_shorthand) has already been expanded to
+    `pr(a,b,c)` by the time the *solve* path runs; brackets because the
+    as-typed copy of the line (raw_fields, the #59 machinery) is split
+    too, and its `[100,10,20,50]` two-port parameter term (#163) must
+    stay one field there as well, or the typed and rewritten splits
+    stop lining up and the typed spelling is lost."""
     fields: List[str] = []
     depth = 0
     current = ""
     for ch in raw:
-        if ch == "(":
+        if ch in "([":
             depth += 1
             current += ch
-        elif ch == ")":
+        elif ch in ")]":
             depth = max(0, depth - 1)
             current += ch
         elif ch == "," and depth == 0:
