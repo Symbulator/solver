@@ -14,7 +14,7 @@ full before writing any circuit description — it's short, has copy-paste
 runnable examples for every analysis mode, and documents the full element
 syntax table (r/l/c/e/j/o/m/s/t/z/y/h/g/a/b).
 
-Three things worth knowing before you start, since they're easy to get wrong
+Four things worth knowing before you start, since they're easy to get wrong
 on the first try and don't always fail loudly:
 
 - Unit prefixes need an apostrophe: `1'k` means 1000 unambiguously; a bare
@@ -31,6 +31,10 @@ on the first try and don't always fail loudly:
   silently does nothing. Use `res.at(t=...)` (substitutes by name), or
   `from symbulator import t` and substitute with the package's own symbol —
   see the README's "Working with the answers (SymPy)" section.
+- Names fold case, variables don't: `R1`/`r1` are one element and
+  `2*VR1` ≡ `2*v_r1` (references derived from names fold too), but a
+  plain variable is case-sensitive — `e,a,b,c` and `e,a,b,C` are
+  different sources, and a condition `c = 5` does not bind `C`.
 
 ## Core docs
 

@@ -80,6 +80,17 @@ symbols (`v_<node>`, `i_<element>`), e.g. `e2,3,0,2*v_2` for a VCVS.
 This mirrors how the original evaluated value strings through the
 calculator's own expression engine.
 
+**Case matters for variables, but not for names.** Element and node
+names fold to lowercase (`R1` and `r1` are one resistor, node `A` is
+node `a`), and so does any reference *derived from them*: `2*VR1`,
+`2*vr1` and `2*v_r1` all mean r1's voltage drop, the same spelling
+equivalence that makes `ir1` ≡ `i_r1` ≡ `IR1`. A variable that names
+nothing in the circuit is an ordinary SymPy symbol and IS
+case-sensitive: `e,a,b,c` and `e,a,b,C` are two different sources, and
+a condition `c = 5` does not touch `C`. The boundary is exact: a name
+folds when (and only when) its folded spelling matches an answer of
+the circuit -- a `v_...`/`i_...`/`p_...` of some element or node.
+
 **Unit shorthand:** the calculator's own `'k`/`'M`/`'u`/... syntax
 (`1'k` = 1000) is always unambiguous, as is an explicit product with a
 symbol (`1*k`). A *bare* suffix like `1k` could mean either one, so by
