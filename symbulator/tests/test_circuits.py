@@ -327,3 +327,18 @@ def test_unsolvable_circuits_name_the_contradiction():
         dc("j1,0,1,2:j2,1,0,3")              # current sources in series
     # The same inductor loop is perfectly fine in ac.
     assert abs(ac("e1,1,0,5:r1,1,2,1:l1,2,0,1e-3:e2,2,0,2", omega=1000)["v_2"] - 2) < 1e-12
+
+
+def test_brackets_only_mean_pr_in_a_resistor_value():
+    # #165: [...] is the parallel-resistor shorthand (r values) or a
+    # two-port's parameter term. Anywhere else it used to be silently
+    # passed to pr() -- e1,1,0,[4,4] became a meaningless "2 V" source
+    # -- and now stops with a message instead.
+    assert dc("e1,1,0,5:r1,1,0,[2,2]").i("r1") == 5          # 2||2 = 1 ohm
+    for bad in ("e1,1,0,[4,4]:r1,1,0,1",
+                "j1,0,1,0.001:c1,1,0,[2,2]",
+                "e1,1,0,5:l1,1,2,[2,2]:r1,2,0,1"):
+        with pytest.raises(CircuitError, match="parallel-resistor"):
+            dc(bad)
+    # A pr(...) the user typed is a function call, legitimate anywhere.
+    dc("e1,1,0,5:l1,1,2,pr(2,2):r1,2,0,1")

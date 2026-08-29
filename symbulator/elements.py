@@ -241,6 +241,28 @@ def parse_circuit(desc: str, expand_si: bool = True) -> List[Element]:
             raise CircuitError(f"More than one element has been named '{name}'.")
         seen_names.add(name)
 
+        # `[...]` means exactly two things (#165, restoring the
+        # calculator's scope): the parallel-resistor shorthand, in a
+        # RESISTOR's value, and a two-port's parameter term. Anywhere
+        # else it used to be silently passed to pr() -- turning
+        # `e1,1,0,[4,4]` into a meaningless "2 V" source -- so it now
+        # stops with a message instead. The typed text is what is
+        # checked: by the time `parts` exists the brackets have been
+        # rewritten to pr(...), and a pr(...) the user *typed* is a
+        # legitimate function call, allowed anywhere.
+        if typed != raw and ("[" in typed or "]" in typed):
+            value_term = 3 if (kind == "r" or kind in TWO_PORT_KINDS) else None
+            for i, tp in enumerate(typed_parts):
+                if ("[" in tp or "]" in tp) and i != value_term:
+                    raise CircuitError(
+                        f"'{typed.strip()}' uses [...] where it has no "
+                        f"meaning. Square brackets are the "
+                        f"parallel-resistor shorthand (in an r element's "
+                        f"value) or a two-port's parameter term "
+                        f"([p11,p12,p21,p22]); for anything else, call "
+                        f"pr(...) explicitly."
+                    )
+
         expected = FIELD_COUNTS[kind]
         if kind in OPTIONAL_IC_KINDS or kind in TWO_PORT_KINDS:
             allowed = {expected, expected + 1}
