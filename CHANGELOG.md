@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.5.24 -- 31 Aug 2026
+
+### Changed
+- **The schematics are drawn the way a textbook draws them (#212).**
+  Roberto's brief, worked against Sadiku & Alexander's *Fundamentals of
+  Electric Circuits* and Boylestad's *Introductory Circuit Analysis*.
+
+  **Element names carry a subscript.** `rin` draws as R with a
+  capitalised subscript IN, `r1` as R with a subscript 1 -- the kind
+  letter full height, the rest below it, the way both books set them.
+  One `<text>` per label with a `<tspan>` per run, the subscript shifted
+  relative to the run before it so a caption can come back up to full
+  size after `R1 = `. An underscore is a separator rather than a
+  character to print (`r_a` is R sub A), which makes the *display*
+  many-to-one -- `rab`, `rAB` and `r_a_b` all read alike. That is
+  confined to the drawing: answers, exports and the description keep
+  every name exactly as it was typed.
+
+  **The inductor is a coil of loops.** Each turn is now an arc of more
+  than a semicircle across a chord shorter than its own diameter, so it
+  closes back past where it started and the turns overlap -- a written
+  cursive `l`, repeated. It was four exact semicircles over chords of
+  exactly 2r, which is a row of humps.
+
+  **A controlled source is a diamond**, an independent one stays a
+  circle (Sadiku, Fig. 1.13). A source counts as controlled when its
+  value refers to another quantity in the circuit, tested against the
+  circuit's own names and folded the way the SPICE exporter folds them,
+  since `i_r1`, `ir1` and `IR1` have been one name to the solver since
+  0.5.19.
+
+  **Labels clear the symbols.** Placement now comes from each symbol's
+  ink rather than one offset for every kind -- the old fixed offset
+  cleared a resistor's zigzag and ran through a capacitor's plates.
+  `REACH` is an ink figure, half a stroke outside its path and, for the
+  resistor, 2.2px further still, because a mitred peak runs past its
+  own vertex. That last figure came from measuring rendered pixels:
+  labels the path geometry called 3px clear were 1px clear on screen.
+
+  Also: the zigzag's peaks are mitred rather than taking the drawing's
+  global round join, which was turning each peak into a blob.
+
+  The label font's ink extents are measured rather than assumed
+  (`LABEL_ASCENT`, `LABEL_DESCENT`, `CAP_DESCENT`), because a baseline
+  is not an edge: a value like `-4j` or `1/gx`, or a node named `ag`,
+  hangs below its baseline, and placement that ignored that left 21 of
+  the 330 example circuits with 1-2px of air above a symbol.
+
+  No API changed. `to_svg()` takes the same descriptions and returns
+  the same kind of standalone SVG.
+
 ## 0.5.23 -- 31 Aug 2026
 
 ### Changed

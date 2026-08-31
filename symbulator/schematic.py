@@ -26,12 +26,20 @@ Dividers, ladders, series RLC, T networks and single-op-amp stages land
 in their textbook form. See LIMITATIONS at the bottom of this module for
 what doesn't.
 
+The symbols follow the books the tutorial teaches from -- Sadiku &
+Alexander's *Fundamentals of Electric Circuits* and Boylestad's
+*Introductory Circuit Analysis*: a zigzag resistor with sharp peaks, a
+coil of loops for an inductor, a circle for an independent source and a
+diamond for a controlled one, and element names set the way those books
+set them, as a kind letter with a capitalised subscript (`rin` -> R_IN).
+
 Colours are left to CSS: every stroke is `currentColor`, so one drawing
 works in both the light and dark themes of the site.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Dict, List, Optional, Tuple
 
@@ -102,13 +110,102 @@ ROW_H = 150        # top row of nodes down to the ground rail
 STACK_H = 78       # extra height per stacked parallel branch
 OP_LANE_H = 78     # extra height per extra op-amp lane
 MARGIN = 58
+GAP = 4.0          # clear air between a symbol's ink and a label's
+
+# How far the label font's ink reaches from its own baseline. Measured,
+# not assumed -- 13px ui-sans-serif renders at ascent 9.75 and descent
+# 3.12, and capitals alone still descend 1.25 (Q's tail). The descent is
+# the number that matters: a value like `-4j`, `1/gx` or a node called
+# `ag` hangs below its baseline, and placing labels as though glyphs sat
+# *on* the baseline is what left twenty-one of the 330 example drawings
+# with 1-2px of air above a symbol instead of GAP. Re-measure with
+# `tools/pixel_clearance.py`'s method if the font or size ever changes.
+LABEL_ASCENT = 10.0
+LABEL_DESCENT = 3.25
+CAP_DESCENT = 1.5    # capitals only, which is all a name or subscript is
+LABEL_GAP = 2.0      # between two stacked labels
 BODY = 46          # length of the symbol body itself, leads excluded
 DOT_R = 3.4
+
+# The inductor's coil: four turns spanning BODY, so its leads line up
+# with the resistor's. IND_R > IND_STEP/2 is what makes each turn a
+# *loop* rather than a hump -- see `_body_l`.
+SRC_R = 15.0       # source outline radius, circle and diamond alike
+IND_LOOPS = 4
+IND_STEP = BODY / IND_LOOPS                      # 11.5
+IND_R = 7.0
+IND_REACH = IND_R + (IND_R ** 2 - (IND_STEP / 2.0) ** 2) ** 0.5
+
+# How far each symbol's **ink** reaches either side of its own axis.
+# Labels are placed from this rather than from one number for every
+# kind: the bodies are not the same height (a capacitor's plates stand
+# 13 out, a resistor's zigzag 9, a coil IND_REACH), and a fixed offset
+# that clears the shallowest runs through the tallest.
+#
+# Ink, not path. Each number below starts as a *centreline* distance,
+# and the stroke puts another half-width outside it -- the resistor far
+# more than that, because a mitred peak runs past its own vertex by
+# half the stroke over the sine of half the vertex angle, 2.2px here.
+# Measured against rendered pixels, a label the path geometry called
+# 3px clear of the zigzag was 1px clear of its ink, which is what a
+# reader sees as touching. `tools/pixel_clearance.py` is that
+# measurement, kept.
+STROKE = 1.7                 # the drawing's stroke-width
+_HALF = STROKE / 2.0
+ZIG_AMP = 9.0                # the zigzag's half-height, centreline
+_ZIG_MITRE = _HALF / math.sin(math.atan2(BODY / 12.0, ZIG_AMP))
+
+REACH = {"r": ZIG_AMP + _ZIG_MITRE,
+         "l": IND_REACH + _HALF,
+         "c": 13.0 + _HALF,
+         "e": SRC_R + _HALF, "j": SRC_R + _HALF,
+         "s": _HALF}
+REACH_BOX = 13.0 + _HALF   # the fallback labelled rectangle
 
 
 def _esc(s: str) -> str:
     return (s.replace("&", "&amp;").replace("<", "&lt;")
              .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+# --- element names, set the way a textbook sets them ----------------
+# `r1` is drawn R with a subscript 1; `rin` as R with a subscript IN.
+# The first letter is the element's kind and stands full height;
+# everything after it says *which* one, and every book this drawing is
+# trying to look like sets that as a capitalised subscript -- Sadiku's
+# R_1 and v_s, Boylestad's C_1 and X_2.
+#
+# An underscore is the reader's own way of writing the same thing
+# (`r_a` means R sub a), so it is a separator here rather than a
+# character to print, and `r_a_b` comes out as R sub AB. That makes the
+# display many-to-one -- `rab`, `rAB` and `r_a_b` all draw alike -- but
+# it already was: the subscript is capitalised, so `rin` and `rIn`
+# were never distinguishable either. The name in the caption block,
+# the answers and the description stays exactly as typed.
+SUB_SCALE = 0.72     # subscript size, as a fraction of the label font
+SUB_DY = 3.4         # how far its baseline drops, px
+
+
+def _split_name(name: str) -> Tuple[str, str]:
+    """`r1` -> ('R', '1'), `vin` -> ('V', 'IN'), `r_a` -> ('R', 'A')."""
+    if not name:
+        return "", ""
+    return name[0].upper(), name[1:].lstrip("_").replace("_", "").upper()
+
+
+def _name_below(subscripted: bool = True) -> float:
+    """How far a *name* label's ink falls below its baseline. A name is
+    a capital and a capitalised subscript, so it never has a true
+    descender -- but the subscript sits SUB_DY lower and capitals still
+    drop CAP_DESCENT."""
+    return (SUB_DY if subscripted else 0.0) + CAP_DESCENT
+
+
+def _name_runs(name: str) -> List[Tuple[str, bool]]:
+    """The name as text runs for `_Canvas.runs`: the kind letter at full
+    height, the rest subscripted."""
+    head, sub = _split_name(name)
+    return [(head, False), (sub, True)]
 
 
 # A float literal long enough to be floating-point dust rather than a
@@ -244,6 +341,7 @@ class _Canvas:
 
     def __init__(self) -> None:
         self.parts: List[str] = []
+        self.inks: List[Tuple[float, float, float, float]] = []
         self.x0 = self.y0 = 1e9
         self.x1 = self.y1 = -1e9
         self.wires: List[Tuple[float, float, float, float]] = []
@@ -279,6 +377,17 @@ class _Canvas:
         crossed, with a hop)."""
         self.esegs.append((min(x1, x2), min(y1, y2),
                            max(x1, x2), max(y1, y2), half))
+
+    def ink(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        """Record where a symbol actually puts ink, so a harness can
+        prove no label lands on it (`tools/review_schematics.py`).
+
+        Not the same thing as `obstacle`, which is the wider keep-out a
+        *wire* has to respect: a label may sit inside a keep-out (every
+        value label does, 3px above its own body) and must still stay
+        off the ink."""
+        self.inks.append((min(x0, x1), min(y0, y1),
+                          max(x0, x1), max(y0, y1)))
 
     def obstacle(self, x0: float, y0: float, x1: float, y1: float) -> None:
         self.obstacles.append((x0, y0, x1, y1))
@@ -359,22 +468,42 @@ class _Canvas:
         self._flush_wires()
 
     def text(self, x: float, y: float, s: str, anchor: str = "middle") -> None:
-        if not s:
+        self.runs(x, y, [(s, False)], anchor)
+
+    def runs(self, x: float, y: float,
+             runs: List[Tuple[str, bool]], anchor: str = "middle") -> None:
+        """One label built of full-size and subscript runs -- `[("R",
+        False), ("1", True)]` is the R_1 an element name is drawn as.
+
+        Emitted as a single <text> with a <tspan> per run, so the runs
+        flow with no positioning arithmetic here; each tspan carries the
+        baseline shift *relative to the previous one*, which is what
+        lets a label come back up to full size after a subscript."""
+        runs = [(t, sub) for t, sub in runs if t]
+        if not runs:
             return
         # Bound by an estimate of the rendered width (13px UI font,
         # ~7.2px average advance), so a long label widens the viewBox
         # instead of being clipped at its edge.
-        w = len(s) * 7.2
+        w = sum(len(t) * (7.2 * SUB_SCALE if sub else 7.2) for t, sub in runs)
         if anchor == "middle":
             x0, x1 = x - w / 2.0, x + w / 2.0
         elif anchor == "end":
             x0, x1 = x - w, x
         else:
             x0, x1 = x, x + w
-        self._bound((x0, y - 12), (x1, y + 4))
+        low = (_name_below() if any(sub for _, sub in runs)
+               else LABEL_DESCENT)
+        self._bound((x0, y - LABEL_ASCENT), (x1, y + low))
+        body, shift = [], 0.0
+        for t, sub in runs:
+            want = SUB_DY if sub else 0.0
+            body.append('<tspan{0} dy="{1:g}">{2}</tspan>'.format(
+                ' class="sub"' if sub else "", want - shift, _esc(t)))
+            shift = want
         self.parts.append(
             '<text class="lbl" x="{0:g}" y="{1:g}" text-anchor="{2}">{3}</text>'
-            .format(x, y, anchor, _esc(s)))
+            .format(x, y, anchor, "".join(body)))
 
     def raw(self, svg: str, *corners: Tuple[float, float]) -> None:
         self._bound(*corners)
@@ -395,7 +524,9 @@ def _body_r(length: float) -> str:
         d.append("L{0:g} {1:g}".format(lead + step * (i + 0.5),
                                        amp if i % 2 == 0 else -amp))
     d.append("L{0:g} 0 L{1:g} 0".format(lead + BODY, length))
-    return '<path d="{0}"/>'.format(" ".join(d))
+    # Mitred, not the page's global round join: a textbook zigzag comes
+    # to a point, and at this size a rounded peak reads as a blob.
+    return '<path d="{0}" stroke-linejoin="miter"/>'.format(" ".join(d))
 
 
 def _body_c(length: float) -> str:
@@ -407,36 +538,67 @@ def _body_c(length: float) -> str:
 
 
 def _body_l(length: float) -> str:
+    """A coil of four loops -- the way Sadiku's Fig. 6.23 and
+    Boylestad's chapter mark draw one, and what circuitikz calls an
+    `american inductor`.
+
+    The loop is the whole point (#212). Each turn is an arc of *more*
+    than a semicircle (large-arc-flag 1) across a chord shorter than
+    its own diameter, so it closes back past where it started and the
+    turns overlap: a written cursive `l`, repeated. The obvious
+    `a r r 0 0 1 2r 0` -- an exact semicircle over a chord of 2r, which
+    is what this used to draw -- gives a row of separate humps instead,
+    a cursive `m`, which no book uses for a plain inductor.
+
+    2*LOOP_R > LOOP_STEP is therefore not a nicety but the condition
+    for the arc to exist at all: at a chord of exactly 2r the two
+    arcs coincide and the flag stops meaning anything."""
     lead = (length - BODY) / 2.0
-    r = BODY / 8.0
     d = ["M0 0 L{0:g} 0".format(lead)]
-    for _ in range(4):
-        d.append("a{0:g} {0:g} 0 0 1 {1:g} 0".format(r, 2 * r))
+    for _ in range(IND_LOOPS):
+        d.append("a{0:g} {0:g} 0 1 1 {1:g} 0".format(IND_R, IND_STEP))
     d.append("L{0:g} 0".format(length))
     return '<path d="{0}"/>'.format(" ".join(d))
 
 
-def _body_e(length: float) -> str:
-    """Independent or dependent voltage source: leads and the circle
+def _source_outline(mid: float, dependent: bool) -> str:
+    """The source's body: a circle, or a diamond when it is controlled.
+
+    "Dependent sources are usually designated by diamond-shaped
+    symbols" -- Sadiku & Alexander, *Fundamentals of Electric
+    Circuits*, Fig. 1.13. Both shapes are drawn to the same radius, so
+    the surrounding layout (which reserves 15px either side of a
+    source's axis) does not have to know which one it got."""
+    r = SRC_R
+    if not dependent:
+        return '<circle cx="{0:g}" cy="0" r="{1:g}" fill="none"/>'.format(
+            mid, r)
+    return ('<path d="M{0:g} 0 L{1:g} {2:g} L{3:g} 0 L{1:g} {4:g} Z" '
+            'fill="none" stroke-linejoin="miter"/>'
+            .format(mid - r, mid, -r, mid + r, r))
+
+
+def _body_e(length: float, dependent: bool = False) -> str:
+    """Independent or dependent voltage source: leads and the outline
     only. The + and - polarity marks are added afterwards by
     `_polarity`, in absolute coordinates -- drawn here they would be
     caught by the group's rotate() and a vertical source would end up
     with a minus sign standing on end."""
-    mid, r = length / 2.0, 15.0
-    return ('<path d="M0 0 L{0:g} 0 M{1:g} 0 L{2:g} 0"/>'
-            '<circle cx="{3:g}" cy="0" r="{4:g}" fill="none"/>'
-            .format(mid - r, mid + r, length, mid, r))
+    mid, r = length / 2.0, SRC_R
+    return ('<path d="M0 0 L{0:g} 0 M{1:g} 0 L{2:g} 0"/>{3}'
+            .format(mid - r, mid + r, length,
+                    _source_outline(mid, dependent)))
 
 
-def _body_j(length: float) -> str:
+def _body_j(length: float, dependent: bool = False) -> str:
     """Current source, arrow pointing n1 -> n2: the solver's positive
     i_<name> leaves n1 through the element (engine.add_current)."""
-    mid, r = length / 2.0, 15.0
-    return ('<path d="M0 0 L{0:g} 0 M{1:g} 0 L{2:g} 0"/>'
-            '<circle cx="{3:g}" cy="0" r="{4:g}" fill="none"/>'
-            '<path d="M{5:g} 0 L{6:g} 0"/>'
-            '<path d="M{7:g} -4 L{6:g} 0 L{7:g} 4" fill="currentColor"/>'
-            .format(mid - r, mid + r, length, mid, r,
+    mid, r = length / 2.0, SRC_R
+    return ('<path d="M0 0 L{0:g} 0 M{1:g} 0 L{2:g} 0"/>{3}'
+            '<path d="M{4:g} 0 L{5:g} 0"/>'
+            '<path d="M{6:g} -4 L{5:g} 0 L{6:g} 4" fill="currentColor"/>'
+            .format(mid - r, mid + r, length,
+                    _source_outline(mid, dependent),
                     mid - 9, mid + 9, mid + 3))
 
 
@@ -456,6 +618,70 @@ def _body_box(length: float, letter: str) -> str:
 
 _BODIES = {"r": _body_r, "c": _body_c, "l": _body_l,
            "e": _body_e, "j": _body_j, "s": _body_s}
+
+
+def _body_extent(kind: str, length: float) -> Optional[Tuple[float, float]]:
+    """How far along the segment the symbol actually draws, measured
+    from the (x1,y1) end, leads excluded -- so a label beside a lead is
+    not mistaken for a label on a symbol. None for a short, which is
+    lead all the way across.
+
+    Symmetric about the midpoint for every kind, which is why the
+    caller can apply it without knowing which way round the element was
+    drawn."""
+    mid = length / 2.0
+    if kind == "s":
+        return None
+    if kind in ("e", "j"):
+        return mid - SRC_R, mid + SRC_R
+    if kind == "c":
+        return mid - 7.0, mid + 7.0        # the two plates and their gap
+    return mid - BODY / 2.0, mid + BODY / 2.0
+
+
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _terminals(e: Element) -> List[str]:
+    """The node names an element attaches to. `m` couples two elements
+    rather than two nodes, so it has none; `o` has three."""
+    if e.kind == "m":
+        return []
+    return list(e.fields[:3]) if e.kind == "o" else [e.n1, e.n2]
+
+
+def _controlled(elements: List[Element]) -> frozenset:
+    """Names of the e/j sources whose value refers to another quantity
+    in the circuit -- a node voltage, an element drop, an element
+    current. Those are the *controlled* (dependent) sources, and a
+    textbook draws them as diamonds rather than circles.
+
+    The spellings are the solver's own, folded the way `spice._fold`
+    folds them: `i_r1`, `ir1` and `IR1` are one name to the solver
+    since 0.5.19, so the test cannot be a search for an underscore.
+    Building the key set from the circuit is what keeps a plain
+    symbolic value apart from a reference: `e1,1,0,vs` is a dependent
+    source exactly when the circuit has something called `s` for it to
+    refer to -- which is the same reading the solver gives it."""
+    def fold(t: str) -> str:
+        return t.replace("_", "").lower()
+
+    keys = set()
+    for e in elements:
+        for n in _terminals(e):
+            keys.add(fold("v" + n))
+        keys.add(fold("v" + e.name))
+        keys.add(fold("i" + e.name))
+    out = set()
+    for e in elements:
+        if e.kind not in ("e", "j"):
+            continue
+        val = (e.value or "").replace("'", "").strip()
+        if not val or _NUMERIC.match(val):
+            continue
+        if any(fold(t) in keys for t in _IDENT.findall(val)):
+            out.add(e.name)
+    return frozenset(out)
 
 
 def _coupling_dot(cv: _Canvas, x1: float, y1: float, x2: float,
@@ -521,15 +747,19 @@ def _polarity(cv: _Canvas, x1: float, y1: float, x2: float,
 
 
 def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
-                  x2: float, y2: float) -> Tuple[float, float]:
+                  x2: float, y2: float,
+                  dependent: bool = False) -> Tuple[float, float]:
     """Draw `e` along the axis-aligned segment (x1,y1)-(x2,y2), oriented
     so that its n1 terminal is the (x1,y1) end. Returns the midpoint, so
     a later pass can tie two element bodies together (mutual
     inductance)."""
     vertical = abs(x2 - x1) < 0.5
     length = abs(y2 - y1) if vertical else abs(x2 - x1)
-    maker = _BODIES.get(e.kind)
-    body = maker(length) if maker else _body_box(length, e.kind.upper())
+    if e.kind in ("e", "j"):
+        body = _BODIES[e.kind](length, dependent)
+    else:
+        maker = _BODIES.get(e.kind)
+        body = maker(length) if maker else _body_box(length, e.kind.upper())
     cv.eseg(x1, y1, x2, y2,
             half=15.0 if e.kind in ("e", "j") else
             0.0 if e.kind == "s" else 23.0)
@@ -546,6 +776,7 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
         # Too long to letter at the element: the name stays, the value
         # goes to the caption block below the drawing (see _render).
         val = ""
+    reach = REACH.get(e.kind, REACH_BOX)
     if vertical:
         top, bot = min(y1, y2), max(y1, y2)
         if y1 < y2:
@@ -554,10 +785,19 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
             tf = "translate({0:g},{1:g}) rotate(-90)".format(x1, bot)
         cv.raw('<g transform="{0}">{1}</g>'.format(tf, body),
                (x1 - 22, top), (x1 + 22, bot))
+        span = _body_extent(e.kind, length)
+        if span:
+            cv.ink(x1 - reach, top + span[0], x1 + reach, top + span[1])
         mx, my = x1, (top + bot) / 2.0
-        dx = 20 if round_body else 17
-        cv.text(mx + dx, my - 3, e.name, "start")
-        cv.text(mx + dx, my + 12, val, "start")
+        # Out to the side by the same clear air the horizontal case
+        # leaves above and below, rather than two numbers per kind.
+        dx = reach + GAP + 1.5
+        # Name above the midpoint, value below it. The gap has to
+        # carry a line of text plus the name's subscript descent, or
+        # the two labels touch (they did, until the clearance check in
+        # review_schematics.py was able to see it).
+        cv.runs(mx + dx, my - 6, _name_runs(e.name), "start")
+        cv.text(mx + dx, my + 13, val, "start")
     else:
         left, right = min(x1, x2), max(x1, x2)
         if x1 < x2:
@@ -566,23 +806,34 @@ def _draw_element(cv: _Canvas, e: Element, x1: float, y1: float,
             tf = "translate({0:g},{1:g}) rotate(180)".format(right, y1)
         cv.raw('<g transform="{0}">{1}</g>'.format(tf, body),
                (left, y1 - 22), (right, y1 + 22))
+        span = _body_extent(e.kind, length)
+        if span:
+            cv.ink(left + span[0], y1 - reach, left + span[1], y1 + reach)
         mx, my = (x1 + x2) / 2.0, y1
         if e.kind == "s" and length > COL_W * 1.5:
             # A long short is a plain wire whose midpoint is exactly
             # where another element's riser tends to cross it (shorts
             # jumper over things by nature); label it off-centre.
             mx = min(x1, x2) + length / 4.0
+        # Every offset below is "the ink clears the ink by GAP", never
+        # a baseline distance: a label's baseline is not its edge.
+        name_up = my - reach - GAP - _name_below()
         if round_body:
-            cv.text(mx, my - 22, e.name)
-            cv.text(mx, my + 28, val)
+            # A source is round and tall: the value goes below it, the
+            # name above, both clear of the outline by GAP.
+            cv.runs(mx, name_up, _name_runs(e.name))
+            cv.text(mx, my + reach + GAP + LABEL_ASCENT, val)
+        elif len(val) * 7.2 > 70:
+            # A long value centred above the body would run into the
+            # neighbouring node's name; below the wire is open.
+            cv.runs(mx, name_up, _name_runs(e.name))
+            cv.text(mx, my + reach + GAP + LABEL_ASCENT, val)
         else:
-            cv.text(mx, my - 25, e.name)
-            if len(val) * 7.2 > 70:
-                # A long value centred above the body would run into
-                # the neighbouring node's name; below the wire is open.
-                cv.text(mx, my + 20, val)
-            else:
-                cv.text(mx, my - 11, val)
+            # Value just above the body, name above the value.
+            vy = my - reach - GAP - LABEL_DESCENT
+            cv.text(mx, vy, val)
+            cv.runs(mx, vy - LABEL_ASCENT - LABEL_GAP - _name_below(),
+                    _name_runs(e.name))
     if e.kind == "e":
         _polarity(cv, x1, y1, x2, y2)
     return mx, my
@@ -705,6 +956,10 @@ class _Layout:
     """Column assignment and the resulting pixel geometry."""
 
     def __init__(self, elements: List[Element]) -> None:
+        # Which sources are controlled -- computed once, from the whole
+        # circuit, because the answer for one source depends on what
+        # names the *others* introduced (see `_controlled`).
+        self.controlled = _controlled(elements)
         self.elements = elements
         self.grounded: List[Element] = []
         self.spanning: List[Element] = []
@@ -1032,6 +1287,7 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
            .format(tx, mid - h / 2, mid + h / 2, tx + w, mid),
            (tx, mid - h / 2), (tx + w, mid + h / 2))
     cv.obstacle(tx, mid - h / 2, tx + w, mid + h / 2)
+    cv.ink(tx, mid - h / 2, tx + w, mid + h / 2)
     # The pin signs are stroked marks, not text glyphs, so they match
     # the voltage source's polarity marks in weight and size (#130).
     _sign_mark(cv, tx + 13, y_minus, up_sign == "+")
@@ -1040,8 +1296,10 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
     # passes over the triangle's top, where the name normally sits, so
     # the name yields the spot and moves under the body instead.
     loop = x_out < tx + w + 12
-    cv.text(tx + w / 2,
-            mid + h / 2 + 16 if loop else mid - h / 2 - 8, e.name)
+    cv.runs(tx + w / 2,
+            mid + h / 2 + GAP + LABEL_ASCENT if loop
+            else mid - h / 2 - GAP - _name_below(),
+            _name_runs(e.name))
 
     # upper input: straight down from its node, then in
     cv.wire(x_in, lay.y_top, x_in, y_minus)
@@ -1062,11 +1320,15 @@ def _draw_opamp(cv: _Canvas, lay: _Layout, e: Element) -> Optional[float]:
         # nothing else touches this input node, so the textbook picture
         # -- input straight down through the source to ground -- is
         # available. The node still gets its name, beside the drop.
+        dep = src.name in lay.controlled
         if _ground_node(src) == src.n1:
-            _draw_element(cv, src, x_p, y_plus, x_p, lay.y_bot)
+            _draw_element(cv, src, x_p, y_plus, x_p, lay.y_bot, dep)
         else:
-            _draw_element(cv, src, x_p, lay.y_bot, x_p, y_plus)
-        cv.text(x_p + 6, y_plus - 6, dn_node, "start")
+            _draw_element(cv, src, x_p, lay.y_bot, x_p, y_plus, dep)
+        # Same clearance rule as every other node name: the wire this
+        # sits over is at y_plus, and a node can be called `p`.
+        cv.text(x_p + 6, y_plus - _HALF - GAP - LABEL_DESCENT,
+                dn_node, "start")
         grounded_at: Optional[float] = x_p
     elif dn_node == "0":
         cv.wire(x_p, y_plus, x_p, lay.y_bot)
@@ -1145,7 +1407,7 @@ def _render(elements: List[Element]) -> str:
             # the row the node actually lives on
             cv.wire(xa, y_top, xa, y)
             cv.wire(xb, y_top, xb, y)
-        _draw_element(cv, e, xa, y, xb, y)
+        _draw_element(cv, e, xa, y, xb, y, e.name in lay.controlled)
         segs[e.name] = (xa, y, xb, y)
 
     # 2. elements with one terminal on ground, hanging down to the rail
@@ -1161,7 +1423,8 @@ def _render(elements: List[Element]) -> str:
             segs[e.name] = (x, y_bot, x, y_top)
         else:
             segs[e.name] = (x, y_top, x, y_bot)
-        _draw_element(cv, e, *segs[e.name])
+        _draw_element(cv, e, *segs[e.name],
+                      dependent=e.name in lay.controlled)
         ground_x.append(x)
 
     # 3. op-amps, before the rail is sized: a grounded non-inverting
@@ -1189,10 +1452,11 @@ def _render(elements: List[Element]) -> str:
                                  .format(gx0 - half, yy, gx0 + half))
         cv.raw("".join(stem_and_bars),
                (gx0 - 11, y_bot), (gx0 + 11, y_bot + 20))
+        cv.ink(gx0 - 11, y_bot, gx0 + 11, y_bot + 20)
         # Name the reference node, same as every other node is named --
         # "0" is a node in the description like any other, and readers
         # tracing v_2 back to its reference need to see it.
-        cv.text(gx0 + 16, y_bot + 21, "0", "start")
+        cv.text(gx0 + 16, y_bot + 21, "0", "start")   # right of the bars
         cv.raw("", (gx0 - 14, y_bot + 26))
 
     # 5. junction dots on the top row wherever three or more things meet
@@ -1206,9 +1470,12 @@ def _render(elements: List[Element]) -> str:
         if n != "0" and count >= 3 and n in lay.node_col:
             cv.dot(lay.px(lay.node_col[n]), y_top)
 
-    # 6. node names, tucked just above the row
+    # 6. node names, tucked just above the row -- clear of the wire by
+    #    GAP like everything else. A node can be called `ag` or `bg`
+    #    (the three-phase books do), and those hang below the baseline.
     for n, col in lay.node_col.items():
-        cv.text(lay.px(col) + 6, y_top - 6, n, "start")
+        cv.text(lay.px(col) + 6,
+                y_top - _HALF - GAP - LABEL_DESCENT, n, "start")
 
     # 7. the caption block, below the drawing: values too long to
     #    letter at their element (the element keeps its name, see
@@ -1224,20 +1491,29 @@ def _render(elements: List[Element]) -> str:
         for coil in (e.n1, e.n2):
             if coil in segs:
                 _coupling_dot(cv, *segs[coil])
-    captions = []
+    # Captions are runs too, so `r1 = ...` reads R_1 there as well as
+    # at the element -- a caption exists only because the value would
+    # not fit beside the symbol, and the two have to name the same
+    # thing in the same hand.
+    captions: List[List[Tuple[str, bool]]] = []
     drawn = set(segs) | {src.name for src in lay.op_src.values()}
     for e in elements:
         if e.kind == "m" or e.name not in drawn:
             continue
         val = _pretty(e)
         if len(val) > CAPTION_LEN:
-            captions.append("{0} = {1}".format(e.name, val))
-    captions.extend("{0} = {1}  (couples {2} and {3})".format(
-        e.name, _pretty(e), e.n1, e.n2) for e in lay.mutuals)
+            captions.append(_name_runs(e.name) + [(" = " + val, False)])
+    for e in lay.mutuals:
+        # `m`'s two fields are coupled *coils*, not nodes, so they are
+        # element names and get the same treatment.
+        captions.append(
+            _name_runs(e.name) + [(" = " + _pretty(e) + "  (couples ", False)]
+            + _name_runs(e.n1) + [(" and ", False)]
+            + _name_runs(e.n2) + [(")", False)])
     if captions:
         cx, cy = cv.x0, cv.y1 + 26
         for i, line in enumerate(captions):
-            cv.text(cx, cy + i * 17, line, "start")
+            cv.runs(cx, cy + i * 17, line, "start")
 
     # 8. emit the collected wires -- merged, with junction dots at every
     #    T-joint and a semicircular hop wherever two wires cross without
@@ -1253,9 +1529,10 @@ def _render(elements: List[Element]) -> str:
         'stroke-linecap="round" stroke-linejoin="round" '
         'class="symbulator-schematic">'
         '<style>.symbulator-schematic .lbl{{font:13px/1 ui-sans-serif,'
-        'system-ui,sans-serif;fill:currentColor;stroke:none}}</style>'
+        'system-ui,sans-serif;fill:currentColor;stroke:none}}'
+        '.symbulator-schematic .sub{{font-size:{5:g}em}}</style>'
         '{4}</svg>'
-    ).format(x0, y0, w, h, "".join(cv.parts))
+    ).format(x0, y0, w, h, "".join(cv.parts), SUB_SCALE)
 
 
 def to_svg(desc: str) -> str:
@@ -1295,3 +1572,16 @@ def draw(desc: str):
 #   dense multi-amp circuit can still accumulate several hops.
 # * Two-port blocks (z/y/h/g/a/b) and the transformer `t` draw as a
 #   labelled box, without their port parameters.
+# * A name is drawn upper-cased with its underscores closed up, so the
+#   display is many-to-one: `rab`, `rAB` and `r_a_b` all read R_AB. The
+#   drawing is the only place this happens -- the answers, the caption
+#   text of an export and the description itself keep the name as it
+#   was typed -- and a circuit that distinguishes two elements by case
+#   or by an underscore alone is already hard to read on the page.
+# * A controlled source is recognised from its value referring to some
+#   other quantity in the circuit, which is exactly how the solver
+#   reads it. A source written with a symbolic value that happens to
+#   collide with a node name (`e1,1,0,vs` in a circuit with a node `s`)
+#   is therefore drawn as a diamond -- correctly, since that is what it
+#   solves as, but it can surprise someone who meant `vs` as a free
+#   parameter and did not notice the collision.

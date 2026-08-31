@@ -18,7 +18,7 @@ import re
 
 import pytest
 
-from symbulator.schematic import to_svg, draw
+from symbulator.schematic import to_svg, draw, _split_name
 from symbulator.elements import CircuitError
 
 
@@ -26,8 +26,20 @@ DIVIDER = "e1,1,0,12:r1,1,2,4:r2,2,0,4"
 
 
 def texts(svg):
-    """The label strings in a drawing, in document order."""
-    return re.findall(r"<text[^>]*>([^<]*)</text>", svg)
+    """The label strings in a drawing, in document order, with each
+    label's runs flattened -- an element name is one <text> holding a
+    full-height <tspan> and a subscript one (#212)."""
+    return [re.sub(r"<[^>]*>", "", inner)
+            for inner in re.findall(r"<text[^>]*>(.*?)</text>", svg)]
+
+
+def shown(name):
+    """How an element name reads once drawn: `r1` -> `R1`, `rin` ->
+    `RIN`. The kind letter stands full height and the rest is a
+    capitalised subscript, so the flattened label is the name upper
+    cased with its underscores closed up."""
+    head, sub = _split_name(name)
+    return head + sub
 
 
 # --- the shape of the output ------------------------------------------
@@ -53,7 +65,7 @@ def test_labels_name_every_element():
     svg = to_svg(DIVIDER)
     joined = " ".join(texts(svg))
     for name in ("e1", "r1", "r2"):
-        assert name in joined
+        assert shown(name) in joined
 
 
 # --- element bodies ----------------------------------------------------
@@ -67,14 +79,14 @@ def test_labels_name_every_element():
 ])
 def test_each_element_type_draws_and_is_labelled(desc, name):
     svg = to_svg(desc)
-    assert name in " ".join(texts(svg))
+    assert shown(name) in " ".join(texts(svg))
     assert svg.count("<path") + svg.count("<line") + svg.count("<circle") > 1
 
 
 def test_two_port_blocks_draw_as_labelled_boxes():
     """A documented limitation: they render, without port parameters."""
     svg = to_svg("e1,1,0,5:z1,1,2:r1,2,0,50")
-    assert "z1" in " ".join(texts(svg))
+    assert shown("z1") in " ".join(texts(svg))
 
 
 # --- things the engine decides, not the drawing ------------------------
@@ -96,8 +108,8 @@ def test_coupled_inductors_are_captioned_not_wired_together():
     just reads as another wire, so the coupling is written above."""
     svg = to_svg("e1,1,0,5:l1,1,0,1e-3:l2,2,0,1e-3:r1,2,0,50:m1,l1,l2,1e-4")
     joined = " ".join(texts(svg))
-    assert "l1" in joined and "l2" in joined
-    assert "m1" in joined or "M" in joined
+    assert shown("l1") in joined and shown("l2") in joined
+    assert shown("m1") in joined
 
 
 def test_negative_coupling_keeps_the_dots_and_shows_its_sign():
@@ -129,12 +141,13 @@ def test_an_element_spanning_an_intermediate_node_is_lifted():
 
 def test_a_chain_comes_out_as_a_chain():
     ladder = to_svg("e1,1,0,5:r1,1,2,1:r2,2,3,1:r3,3,0,1")
-    assert all(n in " ".join(texts(ladder)) for n in ("r1", "r2", "r3"))
+    assert all(shown(n) in " ".join(texts(ladder))
+               for n in ("r1", "r2", "r3"))
 
 
 def test_opamp_stage_draws():
     svg = to_svg("e1,1,0,1:r1,1,2,1'k:r2,2,3,4'k:o1,0,2,3")
-    assert "o1" in " ".join(texts(svg))
+    assert shown("o1") in " ".join(texts(svg))
 
 
 # --- values are shown the way they were typed --------------------------
@@ -172,12 +185,14 @@ def test_long_values_move_to_a_caption_below_the_drawing():
     import re as _re
     desc = "e,1,0,12:r1,1,0,4+20j+[16,-14j+25j]"
     svg = to_svg(desc)
-    labels = [(float(m.group(1)), m.group(2)) for m in _re.finditer(
-        r'<text[^>]*y="([-\d.]+)"[^>]*>([^<]*)</text>', svg)]
-    caption = [y for y, s in labels if s.startswith("r1 = ")]
+    labels = [(float(m.group(1)), _re.sub(r"<[^>]*>", "", m.group(2)))
+              for m in _re.finditer(
+                  r'<text[^>]*y="([-\d.]+)"[^>]*>(.*?)</text>', svg)]
+    caption = [y for y, s in labels if s.startswith(shown("r1") + " = ")]
     assert len(caption) == 1
     # below every other label and every wire
-    assert caption[0] > max(y for y, s in labels if not s.startswith("r1 ="))
+    assert caption[0] > max(y for y, s in labels
+                            if not s.startswith(shown("r1") + " ="))
     # and the value is not also lettered at the element
     assert sum(1 for _, s in labels if "[16," in s) == 1
 
@@ -273,7 +288,7 @@ def test_noninverting_stage_draws_its_source_in_the_input_drop():
     assert lay.op_src["o"].name == "e"
     # and the drawing still names the node and the source
     joined = " ".join(texts(to_svg("e,p,0,v2:r1,1,0,r1:r2,1,o,r2:o,p,1,o")))
-    assert "p" in joined.split() and "e" in joined.split()
+    assert "p" in joined.split() and shown("e") in joined.split()
 
 
 def test_grounded_inverting_input_flips_the_pins():
@@ -339,3 +354,129 @@ def test_a_circuit_without_ground_is_refused():
 def test_draw_returns_something_renderable():
     out = draw(DIVIDER)
     assert out is not None
+
+
+# --- textbook style (#212) ---------------------------------------------
+
+def test_element_names_are_set_with_a_capitalised_subscript():
+    """`rin` draws as R with a subscript IN: one full-height tspan for
+    the kind letter, one `class="sub"` tspan for the rest."""
+    svg = to_svg("e1,1,0,5:rin,1,2,1'k:r_a,2,0,1'k")
+    assert '<tspan class="sub" dy="' in svg
+    joined = " ".join(texts(svg))
+    for typed, drawn in (("rin", "RIN"), ("r_a", "RA"), ("e1", "E1")):
+        assert shown(typed) == drawn
+        assert drawn in joined
+    # the underscore is a separator, not a character to print
+    assert "r_a" not in joined and "_A" not in joined
+
+
+def test_subscripts_are_smaller_than_the_name_they_hang_off():
+    from symbulator.schematic import SUB_SCALE, SUB_DY
+    assert 0.5 < SUB_SCALE < 1.0
+    assert SUB_DY > 0
+    assert ".sub{font-size:" in to_svg(DIVIDER)
+
+
+def test_inductor_turns_are_loops_not_humps():
+    """A textbook coil is a row of loops -- a cursive `l` repeated --
+    which in SVG means each turn is an arc of more than 180 degrees
+    (large-arc-flag 1) across a chord shorter than its own diameter.
+    The large-arc flag with a chord of exactly 2r is the hump."""
+    from symbulator.schematic import IND_LOOPS, IND_R, IND_STEP
+    assert 2 * IND_R > IND_STEP, "chord too long for the arc to loop"
+    svg = to_svg("e1,1,0,5:l1,1,2,1e-3:r1,2,0,10")
+    turn = "a{0:g} {0:g} 0 1 1 {1:g} 0".format(IND_R, IND_STEP)
+    assert svg.count(turn) == IND_LOOPS
+
+
+def test_a_controlled_source_is_a_diamond_and_an_independent_one_a_circle():
+    """Sadiku & Alexander, Fundamentals of Electric Circuits, Fig. 1.13:
+    dependent sources are drawn as diamonds. `_controlled` reads the
+    value the way the solver does, so `2*i_r1` is a reference and a
+    bare symbol is not."""
+    from symbulator.schematic import _source_outline
+    circle, diamond = _source_outline(0.0, False), _source_outline(0.0, True)
+    assert circle.startswith("<circle") and diamond.startswith("<path")
+
+    # two independent sources: two circles, no diamond
+    plain = to_svg("e1,1,0,12:r1,1,2,100:j2,2,0,1")
+    assert plain.count("<circle") == 2 and diamond[:12] not in plain
+    # one independent, one controlled: one of each
+    dep = to_svg("e1,1,0,12:r1,1,2,100:ed,2,0,2*i_r1")
+    assert dep.count("<circle") == 1
+    import re as _re
+    diamonds = [d for d in _re.findall(r'<path d="([^"]*)"[^>]*>', dep)
+                if d.endswith(" Z") and d.count(" L") == 3]
+    assert len(diamonds) == 1, diamonds
+    # a symbolic value that refers to nothing in the circuit is not a
+    # control -- it is simply an unknown -- and keeps its circle
+    sym = to_svg("e1,1,0,vs:r1,1,0,100")
+    assert sym.count("<circle") == 1
+
+
+def test_a_controlled_source_follows_the_solver_s_spelling_rules():
+    """`i_r1`, `ir1` and `IR1` are one name to the solver (0.5.19), so
+    the diamond cannot depend on the underscore being typed."""
+    from symbulator.schematic import _controlled
+    from symbulator.elements import parse_circuit
+    for spelling in ("2*i_r1", "2*ir1", "2*IR1"):
+        els = parse_circuit("e1,1,0,12:r1,1,2,100:ed,2,0," + spelling,
+                            expand_si=False)
+        assert "ed" in _controlled(els), spelling
+
+
+def test_no_label_lands_on_a_symbol():
+    """Every label clears every body's ink. The canvas records where
+    each symbol draws (`_Canvas.ink`) precisely so this can be checked;
+    tools/review_schematics.py runs the same test over all 330 example
+    circuits."""
+    from symbulator.schematic import _Canvas, _render
+    from symbulator.elements import parse_circuit
+    seen = {}
+    orig = _Canvas._flush_wires
+
+    def spy(self):
+        seen["inks"] = list(self.inks)
+        seen["parts"] = list(self.parts)
+        orig(self)
+
+    _Canvas._flush_wires = spy
+    try:
+        for desc in ("e1,1,0,10:r1,1,2,50:l1,2,3,0.1:c1,3,0,1e-6",
+                     "j1,0,1,2:l1,1,0,0.5:c1,1,0,1e-3:ra,1,0,10",
+                     "e1,1,0,10:r1,1,2,1000:jd,2,0,0.05*v_1:r2,2,0,2000"):
+            svg = _render(parse_circuit(desc, expand_si=False))
+            for x0, y0, x1, y1, s in _text_boxes(svg):
+                if not s.strip():
+                    continue
+                for ix0, iy0, ix1, iy1 in seen["inks"]:
+                    ox = min(x1, ix1) - max(x0, ix0)
+                    oy = min(y1, iy1) - max(y0, iy0)
+                    assert not (ox > 1 and oy > 1), (desc, s)
+    finally:
+        _Canvas._flush_wires = orig
+
+
+def _text_boxes(svg):
+    """Estimated boxes for every label, the subscript runs counted at
+    their own width and depth."""
+    from symbulator.schematic import (SUB_SCALE, SUB_DY, LABEL_ASCENT,
+                                      LABEL_DESCENT, CAP_DESCENT)
+    out = []
+    for m in re.finditer(
+            r'<text[^>]*x="([-\d.]+)" y="([-\d.]+)" '
+            r'text-anchor="(\w+)">(.*?)</text>', svg):
+        x, y, anchor, inner = (float(m.group(1)), float(m.group(2)),
+                               m.group(3), m.group(4))
+        runs = re.findall(r'<tspan([^>]*)>([^<]*)</tspan>', inner) \
+            or [("", inner)]
+        w = sum(len(t) * (7.3 * SUB_SCALE if "sub" in a else 7.3)
+                for a, t in runs)
+        x0 = x - w / 2 if anchor == "middle" else (
+            x - w if anchor == "end" else x)
+        low = y + (SUB_DY + CAP_DESCENT
+                   if any("sub" in a for a, _ in runs) else LABEL_DESCENT)
+        out.append((x0, y - LABEL_ASCENT, x0 + w,
+                    low, "".join(t for _, t in runs)))
+    return out
