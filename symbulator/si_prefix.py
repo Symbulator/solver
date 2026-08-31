@@ -152,8 +152,8 @@ def expand_time_domain_braces(text: str) -> str:
             out.append(text[start:end])       # not an expression; leave it
             last = end
             continue
-        result = _check_transform(expr, t2s(expr, validate=False), "s",
-                                  "between brackets")
+        # No fn: this is the `{...}` shorthand, not a call.
+        result = _check_transform(expr, t2s(expr, validate=False), "s")
         out.append(f"({result})")
         last = end
     out.append(text[last:])

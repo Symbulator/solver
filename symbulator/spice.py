@@ -55,6 +55,7 @@ import math
 import re
 from typing import List, Optional, Tuple
 
+from . import messages as M
 from .elements import (parse_circuit, CircuitError, TWO_PORT_KINDS,
                        two_port_param_texts)
 from .si_prefix import safe_sympify
@@ -688,7 +689,7 @@ def from_spice(text: str) -> Tuple[str, List[str]]:
             raw_lines.append(stripped)
 
     if not raw_lines:
-        raise CircuitError("The SPICE netlist is empty.")
+        raise CircuitError(M.E_SPICE_EMPTY)
 
     # Two passes: inductor values first, so a K line can be resolved no
     # matter where it appears.
@@ -742,9 +743,8 @@ def from_spice(text: str) -> Tuple[str, List[str]]:
             out.append(parsed)
 
     if not out:
-        raise CircuitError(
-            "No translatable elements found in the SPICE netlist. "
-            + (" ".join(warnings) if warnings else ""))
+        raise CircuitError(M.E_SPICE_NOTHING,
+                           warnings=" ".join(warnings) if warnings else "")
     return "\n".join(out), warnings
 
 

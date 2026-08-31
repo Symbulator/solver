@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.5.23 -- 31 Aug 2026
+
+### Changed
+- **The engine speaks in codes (#199).** Every `CircuitError` the
+  package raises now carries a **message code and its arguments** as
+  well as its English: `exc.code`, `exc.args_map`, and `str(exc)`
+  rendering from the new `symbulator/messages.py`. Roberto's ruling of
+  31 Aug 2026 -- the package is meant to be under the hood, so it
+  should return structure and let the interface do the words. Thirty-six
+  codes, numbered by module: 2xx `elements`, 3xx `engine`, 4xx
+  `laplace`, 5xx `equiv`, 6xx `spice`.
+
+  Three rules go with them. **A code is permanent once published** --
+  never reused, never renumbered, gaps left alone. **Severity is a
+  field, not a range**, so a warning and an error about one thing need
+  one code. And **the English stays in the package**: it is what a
+  traceback, a bug report or the `.txt` export can quote, and it is the
+  generation source for the app's translations, which is the drift this
+  scheme exists to prevent.
+
+- **`CircuitError` still takes a plain string**, and that is not a
+  transition shim. `CircuitError("some sentence")` sets `code` to None
+  and behaves exactly as before, which is how an exception re-raised
+  from elsewhere keeps flowing through -- and what let the app and the
+  package deploy in either order rather than in step.
+
+- Four messages became two codes apiece rather than one code with a
+  glued-on clause, because the clause is prose a translator has to see
+  whole: the two `_diagnose_unsolvable` diagnoses with and without
+  their dc parenthetical, and "could not solve" with and without the
+  extra-equation hint.
+
+- `laplace._check_transform` takes `fn` (a function's name, or None for
+  the `{...}` shorthand) where it used to take `origin`, a ready-made
+  English phrase. A phrase cannot be translated from inside an
+  argument; a function's name is the same in every language.
+
+### Not in this release
+- **`spice.py`'s warnings are #211.** They look like seventeen messages
+  and are not: seven are `f"{el.name}: {why}"` with `why` built
+  elsewhere, `skip()` alone has seven reasons, and the `described` map
+  names eleven element kinds. That is thirty-odd more codes, and the
+  SPICE translator is still labelled beta in the app -- its wording is
+  the likeliest in the package to change, and a code is permanent.
+
 ## 0.5.22 -- 29 Aug 2026
 
 ### Changed
