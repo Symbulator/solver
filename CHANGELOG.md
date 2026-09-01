@@ -1,5 +1,111 @@
 # Changelog
 
+## 0.5.25 -- 1 Sep 2026
+
+### Added
+- **A dependent source's control is drawn on the element it reads
+  (#213).** A schematic that shows `4*i_r1` only in the diamond's value
+  leaves the reader to work out from the netlist text *which* r1 and
+  which way round -- the one thing a schematic exists to save them.
+
+  **A voltage control marks its drop.** `ed,3,0,2*v_r1` puts a + at
+  r1's first node and a - at its second, just outside the body on the
+  leads, where both books put them. The direction is not a choice:
+  `v_r1` is v(n1) - v(n2) (`engine.stamp_all`), so the + is at n1 every
+  time, whichever way round the layout drew the element.
+
+  **A current control marks its direction.** `ed,3,0,4*i_r1` draws an
+  arrow beside r1 running first node to second, head at the second, and
+  labels it *i* with `R1` as its subscript -- a sloped lower-case i, the
+  way every book sets a current. Again not a choice: the solver's
+  positive `i_r1` flows n1 -> n2 through the element
+  (`engine._stamp_r`).
+
+  Which element a reference names is resolved exactly as
+  `engine._alias_map` resolves it, and it has to be: node voltages are
+  claimed first, so in a circuit with a node called `x` the token `vx`
+  is that node's voltage and *not* the drop across an element called
+  `x`, and nothing is marked. Every spelling the solver folds together
+  is one reference to the drawing -- `5*vr1`, `5v_R1` and `5*V_r1` all
+  mark r1.
+
+  The marks take the side the labels did not: below a horizontal
+  element, left of a vertical one, and over the name when a source's
+  value already hangs below its circle. 48 of the 330 example circuits
+  carry them. Only the two-terminal kinds are marked; an op-amp or a
+  two-port block has no single pair of terminals for a sign to sit at.
+
+  **And the value is typeset to match.** Whatever the reader typed,
+  the drawing sets multiplication as implied rather than starred
+  (`2*x*ir2` is `2x` and then the current; `2*3` keeps its star, since
+  `23` is a different number), a voltage or a current as its own
+  lower-case sloped letter, and what it names as a capitalised
+  subscript. So `2*v_r1`, `2vr1` and `2*VR1` all read *v*_R1 in the
+  diamond, exactly as the resistor beside it reads R_1. A symbol the
+  circuit does not define -- `vs` where there is no node or element
+  `s` -- is a parameter and is left as typed, the same reading that
+  keeps its source a circle. `pi` is printed as the letter for the same
+  reason the star went: spelled out and run together, `100+24*pi*j`
+  becomes the unreadable word `24pij`, where `24πj` reads at a
+  glance.
+
+- **The resistor is 20% smaller and the dependent source 10% larger
+  (#213).** Roberto's call, 1 Sep 2026, on seeing the marks in place: a
+  zigzag was crowding its neighbours and a diamond was not reading as
+  the larger, more deliberate symbol it is. Both are one scale factor
+  on the single number each shape is built from -- `R_SCALE` on `BODY`,
+  `DEP_SCALE` on `SRC_R` -- so nothing else in the geometry needed
+  re-deriving: the zigzag's vertex angle, and so its mitre, is
+  unchanged because its length and its amplitude scale together. The
+  two source shapes are no longer the same size as each other, so the
+  callers that need to know how far a source reaches -- `_body_extent`,
+  the label reach, the wire keep-out and the reference marks -- are all
+  told which one they have.
+
+### Fixed
+- **An SI prefix is a decimal shift, so it is done in decimal (#217).**
+  `js,0,d,397.3'm` translated to SPICE as `Is 0 d 0.39730000000000004`
+  where `js,0,d,.3973` gave `Is 0 d 0.3973` — the same current, two
+  spellings, one of them showing the reader a binary artefact (Roberto,
+  1 Sep 2026).
+
+  The noise was born far upstream of the netlist. `397.3'm` expanded to
+  the *expression* `397.3*10**-3`, and multiplying those two out in
+  binary lands one unit in the last place from the decimal that was
+  typed. Nothing downstream can undo that: it is a different double,
+  and `repr` is right to print all seventeen digits of it. So the
+  prefix is now folded into the number in base ten, with `decimal`,
+  before anything binary sees it — for the quoted form (`397.3'm`) and
+  the bare suffix (`397.3m`) alike, and for every prefix.
+
+  **A whole-numbered mantissa still keeps the `n*10**e` form**, which
+  SymPy reads as an exact Rational: `100'p` is 1/10000000000, not a
+  float, and a circuit of whole-numbered values still solves exactly.
+  Only a mantissa that already carries a decimal point — a Float
+  either way — is folded.
+
+  The same bug ran in the other direction, in the two number
+  formatters: `2.2e-9 / 10**-9` is 2.1999999999999997 in binary, and
+  that went out as `2.1999999999999997N`. Both now take the mantissa
+  out in base ten and check it by reading the decimal back, not by
+  multiplying floats. `100'p` gains from it too — it used to come back
+  as `100.00000000000001P` and is now `100P`.
+
+  Measured rather than assumed: of the 330 example circuits, seven use
+  a decimal mantissa with a prefix (the only ones whose stored value
+  can move at all), and all seven print byte-identical answers before
+  and after. The stored double moves toward the value the reader
+  typed; nothing the reader sees moves.
+
+- **The stacked-row height was never measured (#213).** A lifted
+  source hangs its value below its circle and the element on the row
+  beneath stacks a value and a name above its own; that is 34.75px
+  down against 45.35px up, so `STACK_H` needed 84 and had 78. The pair
+  had been overlapping by 0.4px since #212 gave every name a
+  subscript -- under the review harness's 2px tolerance, and so
+  invisible until the values gained subscripts too and it grew to 2.1.
+  Now 88.
+
 ## 0.5.24 -- 31 Aug 2026
 
 ### Changed

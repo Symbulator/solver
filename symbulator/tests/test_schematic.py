@@ -445,7 +445,14 @@ def test_no_label_lands_on_a_symbol():
     try:
         for desc in ("e1,1,0,10:r1,1,2,50:l1,2,3,0.1:c1,3,0,1e-6",
                      "j1,0,1,2:l1,1,0,0.5:c1,1,0,1e-3:ra,1,0,10",
-                     "e1,1,0,10:r1,1,2,1000:jd,2,0,0.05*v_1:r2,2,0,2000"):
+                     "e1,1,0,10:r1,1,2,1000:jd,2,0,0.05*v_1:r2,2,0,2000",
+                     # ...and with the reference marks a control adds
+                     # (#213), which put ink and a label of their own
+                     # on the side the value did not take
+                     "e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0,4*i_r1:r3,3,0,4",
+                     "e1,1,0,10:r1,1,2,2:rx,2,0,3:ed,3,0,2*v_rx:r3,3,0,4",
+                     "e1,1,0,10:r1,1,2,2:r2,2,0,3:"
+                     "ed,3,0,4*i_r1+2*v_r1:r3,3,0,4"):
             svg = _render(parse_circuit(desc, expand_si=False))
             for x0, y0, x1, y1, s in _text_boxes(svg):
                 if not s.strip():
@@ -480,3 +487,184 @@ def _text_boxes(svg):
         out.append((x0, y - LABEL_ASCENT, x0 + w,
                     low, "".join(t for _, t in runs)))
     return out
+
+
+# --- #213: the element a dependent source reads ----------------------
+
+REF_V = "e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0,2*v_r1:r3,3,0,4"
+REF_I = "e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0,4*i_r1:r3,3,0,4"
+
+
+def _marks(desc, name, x1, y1, x2, y2, mark_v=False, mark_i=False):
+    """`_reference_marks` on one element, drawn along a segment we
+    choose, so the assertions are about the marks and not about where
+    the layout happened to put the element."""
+    from symbulator.schematic import _Canvas, _reference_marks, REACH
+    from symbulator.elements import parse_circuit
+    e = [el for el in parse_circuit(desc, expand_si=False)
+         if el.name == name][0]
+    cv = _Canvas()
+    _reference_marks(cv, e, x1, y1, x2, y2, REACH[e.kind],
+                     mark_v=mark_v, mark_i=mark_i)
+    return cv
+
+
+def _points(d):
+    """Every coordinate pair in a path's `d`, as (x, y)."""
+    nums = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", d)]
+    return list(zip(nums[0::2], nums[1::2]))
+
+
+def test_a_voltage_control_puts_a_plus_at_n1_and_a_minus_at_n2():
+    """`ed,3,0,2*v_r1` tells the reader to measure the drop across r1,
+    and v_r1 is v(n1) - v(n2) (engine.stamp_all). So the + belongs at
+    r1's first node and the - at its second, whichever way round the
+    layout drew it."""
+    for (x1, x2), plus_left in (((100.0, 300.0), True),
+                                ((300.0, 100.0), False)):
+        cv = _marks(REF_V, "r1", x1, 50.0, x2, 50.0, mark_v=True)
+        paths = [re.search(r'd="([^"]*)"', p).group(1) for p in cv.parts]
+        plus = [p for p in paths if p.count("M") == 2]
+        minus = [p for p in paths if p.count("M") == 1]
+        assert len(plus) == 1 and len(minus) == 1, paths
+        px = sum(x for x, _ in _points(plus[0])) / 4.0
+        mx = sum(x for x, _ in _points(minus[0])) / 2.0
+        assert (px < mx) is plus_left, (px, mx)
+        # ...and both below the wire, where the name and value are not
+        assert all(y > 50.0 for _, y in
+                   _points(plus[0]) + _points(minus[0]))
+
+
+def test_a_current_control_draws_an_arrow_from_n1_to_n2():
+    """`ed,3,0,4*i_r1` reads the current through r1, and the solver's
+    positive i_r1 flows n1 -> n2 (engine._stamp_r), so the head goes to
+    the n2 end -- reversed when the layout drew the element the other
+    way round."""
+    for (x1, x2), head_right in (((100.0, 300.0), True),
+                                 ((300.0, 100.0), False)):
+        cv = _marks(REF_I, "r1", x1, 50.0, x2, 50.0, mark_i=True)
+        head = [m.group(1) for m in re.finditer(
+            r'<path d="([^"]*)" fill="currentColor"/>', "".join(cv.parts))]
+        assert len(head) == 1, cv.parts
+        pts = _points(head[0])
+        assert len(pts) == 3
+        tip = pts[1]                     # M corner, L tip, L corner
+        assert (tip[0] > 200.0) is head_right, pts
+
+
+def test_the_current_reference_is_labelled_i_with_the_name_beneath():
+    """The label is the *i* of every textbook -- lower case, sloped --
+    with the element's whole name as its subscript."""
+    cv = _marks(REF_I, "r1", 100.0, 50.0, 300.0, 50.0, mark_i=True)
+    label = [p for p in cv.parts if p.startswith("<text")]
+    assert len(label) == 1
+    assert re.sub(r"<[^>]*>", "", label[0]) == "iR1"
+    assert '<tspan font-style="italic" dy="0">i</tspan>' in label[0]
+    assert '<tspan class="sub"' in label[0]
+
+
+def test_a_reference_reads_every_spelling_the_solver_reads():
+    """`5*vr1`, `5v_R1` and `5*V_r1` are one reference to the solver
+    (0.5.19), so they must be one reference to the drawing."""
+    from symbulator.schematic import _references
+    from symbulator.elements import parse_circuit
+    for spelling in ("5*vr1", "5v_R1", "5*V_r1", "5vR1"):
+        els = parse_circuit(
+            "e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0," + spelling + ":r3,3,0,4",
+            expand_si=False)
+        assert _references(els)[0] == frozenset({"r1"}), spelling
+    for spelling in ("3*ir2", "3i_R2", "3*I_r2"):
+        els = parse_circuit(
+            "e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0," + spelling + ":r3,3,0,4",
+            expand_si=False)
+        assert _references(els)[1] == frozenset({"r2"}), spelling
+
+
+def test_a_node_voltage_is_not_an_element_drop():
+    """`engine._alias_map` claims node voltages first, so in a circuit
+    with a node called `x` the token `vx` is that node's voltage and
+    not the drop across an element called `x`. The drawing has to mark
+    what the solver will actually solve, so it marks nothing here."""
+    from symbulator.schematic import _references
+    from symbulator.elements import parse_circuit
+    els = parse_circuit("e1,1,0,10:rx,1,x,2:r2,x,0,3:ed,3,0,2*vx:r3,3,0,4",
+                        expand_si=False)
+    assert _references(els) == (frozenset(), frozenset())
+
+
+def test_an_unreferenced_element_wears_no_marks():
+    """The marks say "a source is reading this". An ordinary divider
+    has nothing reading anything, and must come out exactly as before."""
+    assert "iR1" not in texts(to_svg(DIVIDER))
+    assert 'font-style="italic"' not in to_svg(DIVIDER)
+    assert "iR1" in texts(to_svg(REF_I))
+
+
+def _runs_of(svg, flat):
+    """The <tspan> runs of the one label whose flattened text is
+    `flat`, as (text, is_subscript, is_italic)."""
+    for inner in re.findall(r"<text[^>]*>(.*?)</text>", svg):
+        if re.sub(r"<[^>]*>", "", inner) != flat:
+            continue
+        return [(m.group("txt"),
+                 'class="sub"' in m.group("attrs"),
+                 "italic" in m.group("attrs"))
+                for m in re.finditer(
+                    r'<tspan(?P<attrs>[^>]*)>(?P<txt>[^<]*)</tspan>', inner)]
+    raise AssertionError("no label %r in %s" % (flat, texts(svg)))
+
+
+def test_a_value_implies_its_multiplication():
+    """No book prints the star. `2*x*ir2` is `2x` and then the
+    current -- and the styling is what keeps the two apart."""
+    svg = to_svg("e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0,2*x*ir2:r3,3,0,4")
+    assert _runs_of(svg, "2xiR2")[0] == ("2x", False, False)
+
+
+def test_multiplication_between_two_numbers_keeps_its_star():
+    """`2*3` is not 23. The star only goes where what follows it
+    cannot be read as a continuation of what precedes it."""
+    assert "2*3" in texts(to_svg("e1,1,0,10:r1,1,2,2*3:r2,2,0,3"))
+
+
+def test_a_referenced_quantity_is_set_as_a_book_sets_it():
+    """Lower-case sloped letter, capitalised subscript -- and the same
+    three runs however the reader spelled it."""
+    for spelling in ("2*v_r1", "2vr1", "2*VR1"):
+        svg = to_svg("e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0,"
+                     + spelling + ":r3,3,0,4")
+        assert _runs_of(svg, "2vR1") == [("2", False, False),
+                                         ("v", False, True),
+                                         ("R1", True, False)], spelling
+    svg = to_svg("e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0,ir1/2:r3,3,0,4")
+    assert _runs_of(svg, "iR1/2") == [("i", False, True),
+                                      ("R1", True, False),
+                                      ("/2", False, False)]
+
+
+def test_a_node_voltage_in_a_value_is_set_the_same_way():
+    """`v_2` is a voltage like any other; the subscript is the node."""
+    svg = to_svg("e1,1,0,10:r1,1,2,2:r2,2,0,3:ed,3,0,2*v_2:r3,3,0,4")
+    assert _runs_of(svg, "2v2") == [("2", False, False),
+                                    ("v", False, True),
+                                    ("2", True, False)]
+
+
+def test_a_free_parameter_is_left_exactly_as_typed():
+    """`vs` in a circuit with no node or element called `s` is a
+    parameter, not a voltage -- the same reading the solver gives it,
+    and the same one that keeps the source a circle."""
+    svg = to_svg("e1,1,0,vs:r1,1,0,100")
+    assert "vs" in texts(svg)
+    assert 'font-style="italic"' not in svg
+
+
+def test_pi_is_printed_as_the_letter():
+    """Once multiplication is implied, `100+24*pi*j` would run together
+    into the word `24pij`. The degrees rewrite goes first, so what is
+    left is a real pi -- and a name that merely contains the two
+    letters is not one."""
+    assert "100+24\u03c0j" in texts(to_svg("e1,1,0,10:r1,1,0,100+24*pi*j"))
+    assert "30\u00b0" in "".join(
+        texts(to_svg("j,0,2,10e^(-t)*sin(2t+30*pi/180):r1,2,0,5")))
+    assert "pin" in texts(to_svg("e1,1,0,10:r1,1,0,pin"))
