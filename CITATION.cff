@@ -12,8 +12,9 @@ type: software
 authors:
   - family-names: Perez-Franco
     given-names: Roberto
-version: 0.6.17
-date-released: 2026-09-20
+    orcid: "https://orcid.org/0000-0002-2495-6993"
+version: 0.6.18
+date-released: 2026-10-01
 license: MIT
 repository-code: "https://github.com/Symbulator/solver"
 url: "https://symbulator.com"

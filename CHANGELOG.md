@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased (#470, #471)
+## 0.6.18 -- 1 Oct 2026 (#470, #471: out of beta, and ready for review)
 
-No change to any answer: nothing under `symbulator/` moved but one comment.
+No change to any answer: nothing under `symbulator/` moved but one comment
+and the version number. This release exists so that PyPI's page carries the
+new classifier and README.
 
 - **Out of beta (#471).** Symbulator 9 left the beta it had been in since its
   public launch on 28 Aug 2026; the classifier is now
