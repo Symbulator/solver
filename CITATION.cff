@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "symbulator: exact symbolic analysis of linear circuits"
+abstract: >-
+  A Python library, built on SymPy, for exact symbolic analysis of linear
+  circuits: DC, AC (phasor), s-domain (Laplace) and transient analysis,
+  Thevenin and Norton equivalents, two-port parameters, and inverse problems
+  solved in the circuit's own system of equations. It is version 9 of
+  Symbulator, first written for TI calculators in 1999, and keeps their
+  circuit notation.
+type: software
+authors:
+  - family-names: Perez-Franco
+    given-names: Roberto
+version: 0.6.17
+date-released: 2026-09-20
+license: MIT
+repository-code: "https://github.com/Symbulator/solver"
+url: "https://symbulator.com"
+keywords:
+  - circuit analysis
+  - symbolic computation
+  - SymPy
+  - electrical engineering
+  - engineering education

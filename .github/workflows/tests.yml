@@ -1,0 +1,52 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+      - name: Install the package with its test extra, and IPython
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[test]" ipython
+      - name: Run the suite against the installed package
+        # Run from outside the checkout so the tests import what pip
+        # installed, the way a user's environment would.
+        working-directory: ${{ runner.temp }}
+        run: python -m pytest --pyargs symbulator.tests -q -rs
+
+  groundtruth:
+    # The SPICE exporter checked against ahkab, an independent simulator.
+    # ahkab is GPL-licensed and is never a dependency of this package; it
+    # is installed here for the check alone. It is old and may not build
+    # on a new Python, so this job may fail without failing the run.
+    name: SPICE ground truth (ahkab)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the package, its test extra and ahkab
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[test]" ahkab
+      - name: Run the ground-truth tests
+        working-directory: ${{ runner.temp }}
+        run: python -m pytest --pyargs symbulator.tests.test_spice_groundtruth -q -rs

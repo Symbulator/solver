@@ -48,9 +48,10 @@ seventeen `warnings.append` sites -- are **#211**. They looked like
 seventeen messages and are not: seven are `f"{el.name}: {why}"` where
 `why` comes from elsewhere, `skip()` alone has seven distinct reasons,
 and the `described` map names eleven element kinds. Coding them properly
-is thirty-odd more codes, and the SPICE translator is still labelled
-beta in the app, which makes its wording the most likely in the package
-to change. A code is permanent; beta prose is not. So they wait.
+is thirty-odd more codes, and the SPICE translator's wording was, when
+this was written, the most likely in the package to change (it was
+labelled beta in the app until #340). A code is permanent; prose still
+settling is not. So they wait.
 
 `si_prefix.py`'s `AmbiguousValueError` and `UnsafeExpressionError` are
 their own classes with their own contract and are not CircuitError; 1xx

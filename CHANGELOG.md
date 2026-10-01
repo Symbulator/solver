@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (#470, #471)
+
+No change to any answer: nothing under `symbulator/` moved but one comment.
+
+- **Out of beta (#471).** Symbulator 9 left the beta it had been in since its
+  public launch on 28 Aug 2026; the classifier is now
+  `Development Status :: 5 - Production/Stable`, and Python 3.13 and 3.14 are
+  listed beside 3.9–3.12.
+- **The repository, ready for review (#470).** A GitHub Actions workflow runs
+  the suite on Python 3.9 to 3.14, with the ahkab ground-truth tests in a job
+  of their own; `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` and `CITATION.cff`
+  added; the JOSS paper and its fact-check in `paper/`.
+- **README.** The *Tests* section names the command that counts the suite
+  instead of a count that had gone stale ("48 tests across six files"; there
+  are 26 files), and says why the ahkab and IPython tests skip in a plain
+  install. Two sentences that still said a side of the circuit behind a port
+  is "reported floating" now say it is given a local reference, as it has
+  been since 0.5.32. The quick start's transient uses `1'u`, so the printed
+  answer matches its comment exactly. Install names the Python versions and
+  the extras.
+
 ## 0.6.17 -- 20 Sep 2026 (#466: evaluate() and solve(), the app's two cards)
 
 ### Added

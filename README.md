@@ -22,7 +22,13 @@ index and the three details that are easiest to get wrong.
 pip install symbulator
 ```
 
-From a checkout of the repository: `pip install -e .`
+Python 3.9 or later; the only dependency is SymPy. Two extras:
+`pip install "symbulator[plot]"` adds NumPy for `time_samples()` and
+`bode_samples()`, and `pip install "symbulator[notebook]"` adds JupyterLab,
+NumPy and Matplotlib for the notebooks.
+
+From a checkout of the repository: `pip install -e .` (or
+`pip install -e ".[test]"` to run the tests).
 
 ## Quick start
 
@@ -45,7 +51,7 @@ eq = th("e1,1,0,12:r1,1,2,4'k:r2,2,0,2'k", "2", "0", domain="dc")
 print(eq.vth, eq.z, eq.pmax)
 
 # Step response of an RC circuit, in the time domain
-res = tr("e1,1,0,5:r1,1,2,1000:c1,2,0,1e-6", variables=["v_2"])
+res = tr("e1,1,0,5:r1,1,2,1000:c1,2,0,1'u", variables=["v_2"])
 print(res["v_2"])      # 5 - 5*exp(-1000*t)
 ```
 
@@ -130,8 +136,9 @@ Write a node term as a bracketed pair, `[top,bottom]`, and all four are
 named:
 
 ```python
-# an ideal transformer between two live pairs; the secondary's side
-# must have its own path to ground (here r5), or it is reported floating
+# an ideal transformer between two live pairs; here r5 grounds the
+# secondary's side -- without it, that side would be given a local
+# reference of its own (see "A side of the circuit with no path to node 0")
 res = dc("e,1,0,10:r0,1,2,1:t,[2,4],[3,5],[2,1]:r4,4,0,3:rl,3,5,100:r5,5,0,7")
 
 # an h-parameter stage with a resistor under its common terminal
@@ -146,8 +153,11 @@ Rules: a transformer's turns must be a pair `[N1,N2]` when its nodes are
 pairs (`t,n1,n2,[N1,N2]` is also accepted on the two-node form); either
 node of a pair may be `0`, so `z,[1,0],[2,0]` is `z,1,2` written out; a
 port with the same node at both terminals is refused; and the two ports
-never conduct across each other, so a side of the circuit with no path
-to node 0 is reported floating (code 217), as a dangling resistor is.
+never conduct across each other, so a side of the circuit reached only
+through a port has no path to node 0 of its own. It is given a local
+reference rather than refused (see *A side of the circuit with no path to
+node 0* below); a dangling piece of ordinary elements is still refused as
+floating (code 217).
 
 **The currents.** A transformer or two-port reports the current
 *entering* it at each of its live terminals, `i_<name><node>` -- `i_t1`,
@@ -625,28 +635,61 @@ numbers is a reliable fallback.
 ## Tests
 
 ```
-pytest symbulator/tests/ -v
+pip install -e ".[test]"
+pytest symbulator/tests
 ```
 
-48 tests across six files:
-- `test_circuits.py` (21): DC/AC voltage & current dividers, series RLC
-  impedance, inverting/non-inverting op-amp gain, a voltage-controlled
-  voltage source, an ideal transformer, mutual inductance (with and
-  without coupling), a two-port block, derived power quantities,
-  zero-valued-capacitor handling, and parser error handling.
-- `test_equiv.py` (9): Thevenin voltage/impedance and its cross-check
-  against directly solving with a load attached, `er()` on series/parallel
-  passive networks, `port()` z/y/a-parameter extraction (including a
-  z·y matrix-inverse consistency check and an a-parameter round trip
-  through the Phase 1 two-port element), and an AC two-port case.
-- `test_laplace.py` (5): `t2s`/`s2t` round trips, an RC step response
-  checked numerically against the closed-form exponential, an RL natural
-  response with a nonzero initial condition checked against its
-  closed-form solution, and zero-valued-capacitor handling carried
-  into `fd()`.
-- `test_dispatch.py` (6): `ex()` dispatch to each of the four analysis
-  modes, its numeric-shorthand domain aliases, and its error handling.
-- `test_expert.py` (7): expert-mode extras -- solving for a symbolic
-  component via an added equation + unknown, auto-added derived-quantity
-  symbols, unit shorthand inside added equations, conditions as
-  solve-time substitutions, and error handling.
+The suite is 26 files under `symbulator/tests/`. Rather than quote a count
+here, which goes stale with every release, run `pytest symbulator/tests -q`
+and read its last line. Two parts of it skip themselves unless an optional
+package is present:
+
+- **`test_spice_groundtruth.py`** checks the SPICE exporter against
+  [ahkab](https://github.com/ahkab/ahkab), an independent circuit
+  simulator, by running each exported netlist and comparing node voltages.
+  It is the one test that can catch a sign convention written
+  symmetrically into both halves of a round trip. ahkab is GPL-licensed
+  and is deliberately **not** a dependency of this MIT package, not even
+  in the `test` extra, so install it separately (`pip install ahkab`) to
+  run these. Nothing else in the package imports it.
+- **`test_notebook.py`**'s cell-magic test needs IPython (`pip install
+  ipython`, or the `notebook` extra).
+
+What the files cover:
+
+- **The engine and its answers:** `test_circuits.py` (textbook circuits
+  with known answers, all element kinds), `test_controlled_sources.py`,
+  `test_coupling.py` and `test_coupling_checks.py` (mutual inductance),
+  `test_four_node_ports.py` and `test_twoport_params.py` (transformers and
+  two-ports), `test_ports_islands.py` (local references behind a port),
+  `test_ac_power_names.py`, `test_angle.py` (polar phasors),
+  `test_symbols.py` and `test_suffix.py` (names, reserved symbols, unit
+  suffixes), `test_step_impulse.py`.
+- **The analyses and tools:** `test_laplace.py` (`t2s`/`s2t`/`tr`),
+  `test_equiv.py` (`th`/`er`/`port`), `test_dispatch.py`, `test_expert.py`
+  and `test_tr_expert.py` (expert mode), `test_pf.py`, `test_cards.py`
+  (`evaluate`/`solve`), `test_plotting.py`, `test_byhand.py` and
+  `test_branches.py` (the by-hand nodal and mesh systems).
+- **Translation and output:** `test_spice.py` and
+  `test_spice_groundtruth.py`, `test_schematic.py`, `test_notebook.py`.
+
+Every push runs the suite on Python 3.9 to 3.14 through GitHub Actions
+(`.github/workflows/tests.yml`).
+
+## Contributing
+
+Bug reports, questions and pull requests are welcome on
+[GitHub](https://github.com/Symbulator/solver/issues). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to report a wrong answer
+usefully and what a change needs before it is merged, and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the conduct expected in the
+project's spaces.
+
+## Citing
+
+If you use Symbulator in published work, please cite it. GitHub's *Cite this
+repository* button reads [CITATION.cff](CITATION.cff).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
