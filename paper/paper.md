@@ -76,17 +76,15 @@ structured analog design, with symbolic noise, pole-zero and root-locus
 analysis and HTML report generation. SapWin [@luchetta2001; @grasso2016] is a
 long-standing Windows application combining schematic capture with symbolic
 analysis for teaching. Numerical Python simulators such as ahkab [@ahkab]
-provide SPICE-like analyses and are useful for cross-checking symbolic results;
-`symbulator`'s test suite uses ahkab that way, at test time only.
+provide SPICE-like analyses, useful for cross-checking symbolic results.
 
 *Build vs. contribute.* `symbulator` is not a new implementation in search of
 users; it is the continuation of an existing program whose notation and
 workflow already have them. Rebuilding it on Lcapy or SLiCAP would have meant
-translating its netlist grammar, its result naming (`v_2`, `i_r1`, `p_r1`),
-its expert-mode equation handling and its calculator-compatible conventions
-(unit suffixes such as `4'k`, RMS versus peak power, the `|` "with" operator
-for conditions) into another package's object model, breaking compatibility
-with existing material in exchange for features its audience does not use.
+translating its grammar, its result naming (`v_2`, `i_r1`, `p_r1`), its
+expert mode and its calculator conventions (unit suffixes such as `4'k`, RMS
+versus peak power) into another package's object model, breaking existing
+material for features its audience does not use.
 
 Two things distinguish it in use. First, a single call returns the whole set of
 quantities an introductory course asks for, exactly and under the course's own
@@ -133,14 +131,11 @@ substituted into Kirchhoff's current law. In the terms of modified nodal
 analysis [@ho1975], most elements are in the group whose currents are
 retained, which gives a system somewhat larger than minimal modified nodal
 analysis but, unlike the sparse tableau approach [@hachtel1971], with no
-branch-voltage unknowns. Keeping element currents as named unknowns lets a
-dependent source, an added equation or a condition refer to `i_r1` directly,
-which is what lets controlled sources and inverse problems share one
-mechanism. Voltage drops, powers and source impedances are computed from the
-solution afterwards, in DC and AC. The design dates from the 1999 calculator
-version, where this *equation generation* approach was chosen over nodal matrix
-methods for its handling of dependent sources, transformers and two-ports in
-symbolic form. It suits the small and medium circuits of teaching and design
+branch-voltage unknowns. Named element currents let a dependent source or an added
+equation refer to `i_r1` directly. Voltage drops, powers and source impedances are computed from the
+solution afterwards, in DC and AC. This *equation generation* design dates from
+the 1999 calculator version, where it was chosen over nodal matrix methods for
+its handling of dependent sources, transformers and two-ports. It suits the small and medium circuits of teaching and design
 derivations; it is not intended for large netlists.
 
 **Exactness by default.** Inputs are parsed as exact rationals where possible,
@@ -171,17 +166,17 @@ with no connection at all is refused as floating.
 and `conditions=` substitute values into it, as the calculator's `|` operator
 did, so design questions and analysis questions use one mechanism.
 
-**Testing.** The test suite checks answers against textbook circuits with
-known solutions, and checks the SPICE exporter against an independent
-simulator [@ahkab]. It runs on Python 3.9 to 3.14 through continuous
-integration.
+**Testing.** The suite checks answers against textbook circuits and the SPICE
+exporter against ahkab, on Python 3.9 to 3.14 in continuous integration.
 
 # Research impact statement
 
-<!-- TODO(Roberto): add evidence of use in teaching (named courses or
-institutions, years, approximate numbers of students), use or citation by
-others, and adoption signals for the Python package (downloads, issues
-from non-authors, forks). JOSS rejects aspirational statements. -->
+<!-- TODO(Roberto): the comments below are undated and all concern the
+TI-89 versions (Symbulator 3, Q and 4, and the 2000 award). Add dates if
+you have them, any adoption by an instructor (a course that recommended or
+required it), and any later evidence (versions 6-9). PyPI downloads and
+GitHub stars were checked on 1 Oct 2026 and left out: 60 releases in seven
+weeks inflate the downloads, and the repository has no stars yet. -->
 
 Symbulator has been developed and distributed since its first calculator
 release in 1999. The paper describing the original TI-89 program won first
@@ -190,7 +185,15 @@ the subject of the author's graduation thesis at the Universidad Tecnológica de
 Panamá [@perezfranco2001thesis]. Half a year after its release on the
 internet, the author reported users among students and engineers in fourteen
 named countries, including a single Texas class in which twelve students used
-it [@perezfranco2001buran]. [TODO: evidence of use in teaching and by others.]
+it [@perezfranco2001buran]. The comments users sent about the calculator
+versions, published by the author [@perezfranco_comments_en;
+@perezfranco_comments_es], number 83 from 74 people at more than thirty
+universities in twenty countries. They describe it as a way to check homework
+and exam answers and to understand circuits; one student recommends it for named circuits courses at the University of
+Kentucky, another reports about thirteen users in a single group at the
+University of Central Florida, and several describe passing it to their
+classmates. A practising engineer reports using it to check answers while
+preparing for the Professional Engineering exam.
 
 The Python package is the computational core of the Symbulator web
 application. The repository includes executed notebooks, each opening in
