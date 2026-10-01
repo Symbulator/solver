@@ -173,8 +173,9 @@ exporter against ahkab, on Python 3.9 to 3.14 in continuous integration.
 
 <!-- TODO(Roberto): the comments below are undated and all concern the
 TI-89 versions (Symbulator 3, Q and 4, and the 2000 award). Add dates if
-you have them, any adoption by an instructor (a course that recommended or
-required it), and any later evidence (versions 6-9). PyPI downloads and
+you have them, and any later evidence (versions 6-9). No instructor is
+known to have adopted it for a class (Roberto, 1 Oct 2026), so the section
+claims student and professional use only. PyPI downloads and
 GitHub stars were checked on 1 Oct 2026 and left out: 60 releases in seven
 weeks inflate the downloads, and the repository has no stars yet. -->
 
